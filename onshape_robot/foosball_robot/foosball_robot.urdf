@@ -1,0 +1,93 @@
+<?xml version="1.0" ?>
+<!-- Generated using onshape-to-robot -->
+<!-- Onshape https://cad.onshape.com/documents/e803f61fd7378df7db81a183/w/36ce3c529374e351e627bf1e/e/ae663fd50540cead502d899d -->
+<robot name="foosball_robot">
+  <!-- Link main_body -->
+  <link name="main_body">
+    <inertial>
+      <origin xyz="-1.49963e-14 6.72268e-17 0.0522025" rpy="0 0 0"/>
+      <mass value="4.72465"/>
+      <inertia ixx="0.134376" ixy="0" ixz="-1.81578e-12" iyy="0.20079" iyz="1.4124e-16" izz="0.30924"/>
+    </inertial>
+    <!-- Part main_body -->
+    <visual>
+      <origin xyz="-1.21021e-18 3.54014e-18 0" rpy="0 -0 0"/>
+      <geometry>
+        <mesh filename="package://assets/main_body.stl"/>
+      </geometry>
+      <material name="main_body_material">
+        <color rgba="0.721569 0.678431 0.54902 1"/>
+      </material>
+    </visual>
+    <!-- <collision>
+      <origin xyz="-1.21021e-18 3.54014e-18 0" rpy="0 -0 0"/>
+      <geometry>
+        <mesh filename="package://assets/main_body.stl"/>
+      </geometry>
+    </collision> -->
+  </link>
+  <!-- Link rod -->
+  <link name="rod">
+    <inertial>
+      <origin xyz="-1.38778e-17 -1.38778e-17 -0.45" rpy="0 0 0"/>
+      <mass value="0.688975"/>
+      <inertia ixx="0.0465213" ixy="0" ixz="0" iyy="0.0465213" iyz="-4.07439e-47" izz="3.109e-05"/>
+    </inertial>
+    <!-- Part rod -->
+    <visual>
+      <origin xyz="-0.0414993 -0.0452426 -0.45" rpy="-1.5708 -0 0"/>
+      <geometry>
+        <mesh filename="package://assets/rod.stl"/>
+      </geometry>
+      <material name="rod_material">
+        <color rgba="0.647059 0.647059 0.647059 1"/>
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="-0.0414993 -0.0452426 -0.45" rpy="-1.5708 -0 0"/>
+      <geometry>
+        <mesh filename="package://assets/rod.stl"/>
+      </geometry>
+    </collision>
+  </link>
+  <!-- Link player -->
+  <link name="player">
+    <inertial>
+      <origin xyz="-4.34546e-17 0.0188179 1.59852e-17" rpy="0 0 0"/>
+      <mass value="0.154321"/>
+      <inertia ixx="0.000209611" ixy="-5.91939e-22" ixz="7.37338e-47" iyy="4.81083e-05" iyz="-2.36013e-47" izz="0.000210579"/>
+    </inertial>
+    <!-- Part player -->
+    <visual>
+      <origin xyz="-5.55112e-17 0.1 2.77556e-17" rpy="1.5708 -3.51765e-43 2.95182e-17"/>
+      <geometry>
+        <mesh filename="package://assets/player.stl"/>
+      </geometry>
+      <material name="player_material">
+        <color rgba="0.866667 0.321569 0.156863 1"/>
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="-5.55112e-17 0.1 2.77556e-17" rpy="1.5708 -3.51765e-43 2.95182e-17"/>
+      <geometry>
+        <mesh filename="package://assets/player.stl"/>
+      </geometry>
+    </collision>
+  </link>
+  <!-- Joint from rod to player -->
+  <joint name="kicker" type="revolute">
+    <origin xyz="0 0 -0.45" rpy="3.14159 2.13707e-27 -0.785315"/>
+    <parent link="rod"/>
+    <child link="player"/>
+    <axis xyz="0 0 1"/>
+    <limit effort="10" velocity="10" lower="-3.141592653589793" upper="3.141592653589793"/>
+  </joint>
+  <!-- Joint from main_body to rod -->
+  <joint name="slider" type="prismatic">
+    <origin xyz="-0.172 -0.461237 0.11" rpy="1.5708 -0 -1.81068e-29"/>
+    <parent link="main_body"/>
+    <child link="rod"/>
+    <axis xyz="0 0 1"/>
+    <limit effort="10" velocity="10" lower="-0.165237" upper="0.142763"/>
+  </joint>
+</robot>
