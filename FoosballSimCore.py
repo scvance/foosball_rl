@@ -151,6 +151,19 @@ class _FoosballSimCore:
             self.env_body_ids.extend(self.wall_catcher_ids)
             self._disable_robot_vs_env_collisions(self.wall_catcher_ids)
 
+        # HUD: scoreboard anchored above the goal mouth (GUI only)
+        self._score_text_id: Optional[int] = None
+        self._score_anchor_world = self.table_local_to_world_pos(
+            [self.goal_rect_x, 0.0, self.goal_rect_z_max + 0.14]
+        )
+        # Debug overlays (GUI only)
+        self._dbg_ball_id: Optional[int] = None
+        self._dbg_player_id: Optional[int] = None
+        self._dbg_aim_line_id: Optional[int] = None
+        self._dbg_goal_point_id: Optional[int] = None
+        self._est_pos_vis: Optional[np.ndarray] = None
+        self._est_vel_vis: Optional[np.ndarray] = None
+
     # ----------------------------
     # Core utilities
     # ----------------------------
@@ -330,6 +343,144 @@ class _FoosballSimCore:
             baseOrientation=self.base_orn,
         )
         return bid
+
+    def update_scoreboard_text(self, goals: int, blocks: int, outs: int, highlight: Optional[str] = None) -> None:
+        """
+        Render a bold scoreboard above the goal mouth. No-op when GUI is disabled.
+        highlight can be 'goal' | 'block' | 'out' to tint the text.
+        """
+        if not self.use_gui:
+            return
+
+        if self._score_text_id is not None:
+            try:
+                p.removeUserDebugItem(self._score_text_id)
+            except Exception:
+                pass
+
+        color_map = {
+            "goal": (1.0, 0.2, 0.2),
+            "block": (0.2, 1.0, 0.4),
+            "out": (1.0, 0.85, 0.25),
+            None: (1.0, 1.0, 1.0),
+        }
+        # Compact single-line scoreboard so counters stay tight together when zoomed in.
+        text = f"G:{int(goals)}  B:{int(blocks)}  O:{int(outs)}"
+        color = color_map.get(highlight, color_map[None])
+
+        self._score_text_id = p.addUserDebugText(
+            text,
+            self._score_anchor_world,
+            textColorRGB=color,
+            textSize=1.2,
+            lifeTime=0,
+        )
+
+    def _remove_debug_item(self, item_id_attr: str) -> None:
+        iid = getattr(self, item_id_attr)
+        if iid is None:
+            return
+        try:
+            p.removeUserDebugItem(iid)
+        except Exception:
+            pass
+        setattr(self, item_id_attr, None)
+
+    def set_goal_intercept_debug(self, y_hit: Optional[float], z_hit: Optional[float]) -> None:
+        """
+        Draws a small marker on the goal plane at the predicted intercept (GUI only).
+        Pass None to clear.
+        """
+        if not self.use_gui:
+            return
+
+        if y_hit is None or z_hit is None:
+            self._remove_debug_item("_dbg_goal_point_id")
+            return
+
+        base_w = self.table_local_to_world_pos([self.goal_rect_x, y_hit, z_hit])
+        top_w = self.table_local_to_world_pos([self.goal_rect_x, y_hit, z_hit + 0.03])
+        self._dbg_goal_point_id = p.addUserDebugLine(
+            base_w,
+            top_w,
+            lineColorRGB=(0.2, 1.0, 0.2),
+            lineWidth=6,
+            replaceItemUniqueId=self._dbg_goal_point_id if self._dbg_goal_point_id is not None else -1,
+        )
+
+    def _update_debug_markers(self) -> None:
+        """
+        Draws:
+        - player center (vertical cyan line)
+        - estimated ball local position (vertical yellow line)
+        - estimated aim line from ball toward goal plane using estimated velocity
+        """
+        if not self.use_gui:
+            return
+
+        # Player center marker (always shown)
+        player_c = self.get_player_center_local()
+        player_start_w = self.table_local_to_world_pos(player_c)
+        player_end_w = self.table_local_to_world_pos([player_c[0], player_c[1], player_c[2] + 0.05])
+        self._dbg_player_id = p.addUserDebugLine(
+            player_start_w,
+            player_end_w,
+            lineColorRGB=(0.2, 0.8, 1.0),
+            lineWidth=3,
+            replaceItemUniqueId=self._dbg_player_id if self._dbg_player_id is not None else -1,
+        )
+
+        if self._est_pos_vis is None or self._est_vel_vis is None:
+            self._remove_debug_item("_dbg_ball_id")
+            self._remove_debug_item("_dbg_aim_line_id")
+            return
+
+        pos_l = self._est_pos_vis
+        vel_l = self._est_vel_vis
+
+        # Ball marker
+        ball_start_w = self.table_local_to_world_pos(pos_l)
+        ball_end_w = self.table_local_to_world_pos([pos_l[0], pos_l[1], pos_l[2] + 0.05])
+        self._dbg_ball_id = p.addUserDebugLine(
+            ball_start_w,
+            ball_end_w,
+            lineColorRGB=(1.0, 1.0, 0.2),
+            lineWidth=3,
+            replaceItemUniqueId=self._dbg_ball_id if self._dbg_ball_id is not None else -1,
+        )
+
+        # Aim line: intersection with goal plane using estimated velocity
+        vx = float(vel_l[0])
+        if abs(vx) > 1e-5:
+            t = (float(self.goal_rect_x) - float(pos_l[0])) / vx
+        else:
+            t = -1.0
+
+        if t > 0.0 and t < 5.0:
+            y_hit = float(pos_l[1]) + float(vel_l[1]) * t
+            z_hit = float(pos_l[2]) + float(vel_l[2]) * t
+            aim_start_w = ball_start_w
+            aim_end_w = self.table_local_to_world_pos([self.goal_rect_x, y_hit, z_hit])
+            self._dbg_aim_line_id = p.addUserDebugLine(
+                aim_start_w,
+                aim_end_w,
+                lineColorRGB=(0.98, 0.3, 0.98),
+                lineWidth=2,
+                replaceItemUniqueId=self._dbg_aim_line_id if self._dbg_aim_line_id is not None else -1,
+            )
+        else:
+            self._remove_debug_item("_dbg_aim_line_id")
+
+    def set_estimated_ball_state(self, est_pos: Optional[np.ndarray], est_vel: Optional[np.ndarray]) -> None:
+        """
+        Accepts estimated ball state (table-local) for visualization. Pass None to clear.
+        """
+        if est_pos is None or est_vel is None:
+            self._est_pos_vis = None
+            self._est_vel_vis = None
+            return
+        self._est_pos_vis = np.array(est_pos, dtype=np.float32)
+        self._est_vel_vis = np.array(est_vel, dtype=np.float32)
 
     # ----------------------------
     # Table floor estimation
@@ -649,3 +800,5 @@ class _FoosballSimCore:
             p.stepSimulation()
             if self.ball_id is not None:
                 self.ball_steps += 1
+            # Debug overlays for GUI: player center, ball, aim line
+            self._update_debug_markers()

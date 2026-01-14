@@ -1,9 +1,9 @@
 """
-Load and watch the best SAC model trained on FoosballGoalieEnv.
+Load and watch the best PPO model trained on FoosballGoalieEnv.
 
 Examples:
-  python watch_best_sac_foosball.py --run_dir ./sac_foosball_20260110_123456
-  python watch_best_sac_foosball.py --model ./sac_foosball_20260110_123456/best/best_model.zip
+  python watch_best_sac_foosball.py --run_dir ./ppo_foosball_20260110_123456
+  python watch_best_sac_foosball.py --model ./ppo_foosball_20260110_123456/best/best_model.zip
 
 Optional video:
   python watch_best_sac_foosball.py --run_dir ./sac_foosball_... --record_mp4

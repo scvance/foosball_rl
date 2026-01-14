@@ -12,11 +12,12 @@ import os
 import time
 import argparse
 from collections import deque
+import multiprocessing as mp
 
 import numpy as np
 
 from stable_baselines3 import SAC
-from stable_baselines3.common.vec_env import DummyVecEnv, VecMonitor
+from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv, VecMonitor
 from stable_baselines3.common.callbacks import BaseCallback, CallbackList, CheckpointCallback, EvalCallback
 from stable_baselines3.common.utils import set_random_seed
 
@@ -113,7 +114,7 @@ def main():
     parser.add_argument("--run_name", type=str, default=None, help="Optional run name. Defaults to sac_foosball_<timestamp>.")
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--total_timesteps", type=int, default=2_000_000)
-    parser.add_argument("--n_envs", type=int, default=1)
+    parser.add_argument("--n_envs", type=int, default=max(1, min(12, mp.cpu_count())))
 
     parser.add_argument("--eval_freq", type=int, default=50_000)
     parser.add_argument("--n_eval_episodes", type=int, default=10)
@@ -124,6 +125,8 @@ def main():
     parser.add_argument("--bounce_prob", type=float, default=0.25)
     parser.add_argument("--action_repeat", type=int, default=8)
     parser.add_argument("--max_episode_steps", type=int, default=1500)
+    parser.add_argument("--device", type=str, default="cpu", help="Device for SAC (cpu, mps, cuda, auto).")
+    parser.add_argument("--num_substeps", type=int, default=8, help="PyBullet substeps (lower = faster, less accurate).")
 
     args = parser.parse_args()
 
@@ -148,18 +151,21 @@ def main():
         time_step=1.0 / 240.0,
         action_repeat=args.action_repeat,
         max_episode_steps=args.max_episode_steps,
+        num_substeps=args.num_substeps,
         speed_min=args.speed_min,
         speed_max=args.speed_max,
         bounce_prob=args.bounce_prob,
     )
 
     # -------- Training env --------
-    # VecMonitor provides episode stats (reward/len) for TensorBoard for VecEnvs. :contentReference[oaicite:3]{index=3}
-    train_venv = DummyVecEnv([make_env("none", args.seed, i, **env_kwargs) for i in range(args.n_envs)])
-    train_venv = VecMonitor(train_venv)  # adds ep_rew_mean, ep_len_mean, etc.
+    # SubprocVecEnv to saturate CPU cores; VecMonitor adds ep stats for TensorBoard.
+    train_fns = [make_env("none", args.seed, i, **env_kwargs) for i in range(args.n_envs)]
+    train_venv = SubprocVecEnv(train_fns) if args.n_envs > 1 else DummyVecEnv(train_fns)
+    train_venv = VecMonitor(train_venv)
 
     # -------- Eval env --------
-    eval_env = DummyVecEnv([make_env("none", args.seed + 10_000, 0, **env_kwargs)])
+    eval_fns = [make_env("none", args.seed + 10_000, 0, **env_kwargs)]
+    eval_env = SubprocVecEnv(eval_fns) if len(eval_fns) > 1 else DummyVecEnv(eval_fns)
     eval_env = VecMonitor(eval_env)
 
     # -------- Model --------
@@ -169,18 +175,27 @@ def main():
         env=train_venv,
         verbose=1,
         tensorboard_log=tb_dir,
-        device="auto",
+        device=args.device,
         # Reasonable defaults; adjust later
         learning_rate=3e-4,
         buffer_size=1_000_000,
         learning_starts=10_000,
-        batch_size=256,
+        batch_size=64,
         tau=0.005,
         gamma=0.99,
         train_freq=(1, "step"),
         gradient_steps=1,
         ent_coef="auto",
     )
+
+    # model = PPO(
+    #     policy="MlpPolicy",
+    #     env=train_venv,
+    #     verbose=1,
+    #     tensorboard_log=tb_dir,
+    #     device="auto",
+    #     learning_rate=3e-4
+    # )
 
     # -------- Callbacks --------
     # Checkpoint + Eval are built-ins. :contentReference[oaicite:5]{index=5}
