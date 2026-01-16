@@ -21,16 +21,15 @@ from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv, VecMoni
 from stable_baselines3.common.callbacks import BaseCallback, CallbackList, CheckpointCallback, EvalCallback
 from stable_baselines3.common.utils import set_random_seed
 
-# Your env import (adjust if needed)
 from FoosballGoalieEnv import FoosballGoalieEnv
 
 
 class EventStatsCallback(BaseCallback):
     """
-    Logs goal/block counts + rates to TensorBoard.
+    Logs goal/block/out counts + rates to TensorBoard.
 
     Requires that env.step() info contains:
-      - info["event"] in {"goal","block",None}
+      - info["event"] in {"goal","block","out",None}
       - info["dense"] (optional, float)
     """
 
@@ -48,7 +47,6 @@ class EventStatsCallback(BaseCallback):
         self.episodes_total = 0
 
     def _on_step(self) -> bool:
-        # In SB3 callbacks, locals contains "infos" and "dones" for VecEnv rollouts
         infos = self.locals.get("infos", None)
         dones = self.locals.get("dones", None)
 
@@ -69,20 +67,33 @@ class EventStatsCallback(BaseCallback):
             self.goals_total += is_goal
             self.blocks_total += is_block
             self.outs_total += is_out
+
             self.goal_hist.append(is_goal)
             self.block_hist.append(is_block)
             self.out_hist.append(is_out)
 
-            # log per-episode event flags (useful for debugging)
+            # per-episode flags
             self.logger.record("train/episode_is_goal", float(is_goal))
             self.logger.record("train/episode_is_block", float(is_block))
             self.logger.record("train/episode_is_out", float(is_out))
 
-            # optional: log the last dense value we saw at terminal step
+            # terminal dense
             if "dense" in info:
                 self.logger.record("train/episode_terminal_dense", float(info["dense"]))
 
-        # Log cumulative + rolling rates
+            # Optional telemetry if you included it in env.info
+            if "slider_vel" in info:
+                self.logger.record("train/episode_terminal_slider_vel", float(info["slider_vel"]))
+            if "kicker_vel" in info:
+                self.logger.record("train/episode_terminal_kicker_vel", float(info["kicker_vel"]))
+            if "steps_per_policy" in info:
+                self.logger.record("train/steps_per_policy", float(info["steps_per_policy"]))
+            if "dt_sim" in info:
+                self.logger.record("train/dt_sim", float(info["dt_sim"]))
+            if "dt_policy" in info:
+                self.logger.record("train/dt_policy", float(info["dt_policy"]))
+
+        # cumulative + rolling rates
         if self.episodes_total > 0:
             self.logger.record("train/episodes_total", float(self.episodes_total))
             self.logger.record("train/goals_total", float(self.goals_total))
@@ -119,14 +130,24 @@ def main():
     parser.add_argument("--eval_freq", type=int, default=50_000)
     parser.add_argument("--n_eval_episodes", type=int, default=10)
 
-    # Env params
+    # Env params (shots)
     parser.add_argument("--speed_min", type=float, default=2.0)
     parser.add_argument("--speed_max", type=float, default=10.0)
     parser.add_argument("--bounce_prob", type=float, default=0.25)
-    parser.add_argument("--action_repeat", type=int, default=8)
-    parser.add_argument("--max_episode_steps", type=int, default=1500)
+
+    # NEW: control rates
+    parser.add_argument("--policy_hz", type=float, default=20.0, help="Policy update frequency (Hz).")
+    parser.add_argument("--sim_hz", type=int, default=1000, help="Simulation frequency (Hz). Try 2000.")
+
+    # NEW: action caps (what policy can ask for)
+    parser.add_argument("--slider_vel_cap_mps", type=float, default=15.0)
+    parser.add_argument("--kicker_vel_cap_rads", type=float, default=170.0)
+
+    # Physics
+    parser.add_argument("--num_substeps", type=int, default=8, help="PyBullet substeps (lower=faster, less accurate).")
+
+    # SAC device
     parser.add_argument("--device", type=str, default="cpu", help="Device for SAC (cpu, mps, cuda, auto).")
-    parser.add_argument("--num_substeps", type=int, default=8, help="PyBullet substeps (lower = faster, less accurate).")
 
     args = parser.parse_args()
 
@@ -135,7 +156,6 @@ def main():
     timestamp = time.strftime("%Y%m%d_%H%M%S")
     run_name = args.run_name or f"sac_foosball_{timestamp}"
 
-    # All outputs under logdir/run_name so `tensorboard --logdir .` still finds them.
     out_dir = os.path.join(args.logdir, run_name)
     os.makedirs(out_dir, exist_ok=True)
 
@@ -148,37 +168,41 @@ def main():
     os.makedirs(best_dir, exist_ok=True)
 
     env_kwargs = dict(
-        time_step=1.0 / 240.0,
-        action_repeat=args.action_repeat,
-        max_episode_steps=args.max_episode_steps,
+        # rates
+        policy_hz=args.policy_hz,
+        sim_hz=args.sim_hz,
+        # caps
+        slider_vel_cap_mps=args.slider_vel_cap_mps,
+        kicker_vel_cap_rads=args.kicker_vel_cap_rads,
+        # physics
         num_substeps=args.num_substeps,
+        # shot distribution
         speed_min=args.speed_min,
         speed_max=args.speed_max,
         bounce_prob=args.bounce_prob,
+        # keep training headless
+        real_time_gui=False,
     )
 
     # -------- Training env --------
-    # SubprocVecEnv to saturate CPU cores; VecMonitor adds ep stats for TensorBoard.
     train_fns = [make_env("none", args.seed, i, **env_kwargs) for i in range(args.n_envs)]
     train_venv = SubprocVecEnv(train_fns) if args.n_envs > 1 else DummyVecEnv(train_fns)
     train_venv = VecMonitor(train_venv)
 
     # -------- Eval env --------
     eval_fns = [make_env("none", args.seed + 10_000, 0, **env_kwargs)]
-    eval_env = SubprocVecEnv(eval_fns) if len(eval_fns) > 1 else DummyVecEnv(eval_fns)
+    eval_env = DummyVecEnv(eval_fns)
     eval_env = VecMonitor(eval_env)
 
     # -------- Model --------
-    # TensorBoard logging is enabled via tensorboard_log=... :contentReference[oaicite:4]{index=4}
     model = SAC(
         policy="MlpPolicy",
         env=train_venv,
         verbose=1,
         tensorboard_log=tb_dir,
         device=args.device,
-        # Reasonable defaults; adjust later
         learning_rate=3e-4,
-        buffer_size=1_000_000,
+        buffer_size=5_000_000,
         learning_starts=10_000,
         batch_size=64,
         tau=0.005,
@@ -188,19 +212,9 @@ def main():
         ent_coef="auto",
     )
 
-    # model = PPO(
-    #     policy="MlpPolicy",
-    #     env=train_venv,
-    #     verbose=1,
-    #     tensorboard_log=tb_dir,
-    #     device="auto",
-    #     learning_rate=3e-4
-    # )
-
     # -------- Callbacks --------
-    # Checkpoint + Eval are built-ins. :contentReference[oaicite:5]{index=5}
     checkpoint_cb = CheckpointCallback(
-        save_freq=50_000,  # env steps (across VecEnv)
+        save_freq=50_000,
         save_path=ckpt_dir,
         name_prefix="sac",
         save_replay_buffer=True,
@@ -218,7 +232,6 @@ def main():
     )
 
     event_cb = EventStatsCallback(rolling_window=100)
-
     callbacks = CallbackList([event_cb, checkpoint_cb, eval_cb])
 
     # -------- Train --------
@@ -229,7 +242,6 @@ def main():
         progress_bar=True,
     )
 
-    # -------- Save final --------
     model.save(os.path.join(out_dir, "final_model"))
 
     train_venv.close()

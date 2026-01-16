@@ -130,11 +130,20 @@ class FoosballSim:
         self.play_surface_z_local = self.play_surface_z - self.base_pos[2]
 
         # Goal rectangle (table-local)
+        # home
         self.goal_rect_x = -0.275
         self.goal_rect_y_min = -0.09
         self.goal_rect_y_max = 0.09
         self.goal_rect_z_min = 0.00
         self.goal_rect_z_max = 0.10
+        self.goalie_x = -0.172  # slightly in front of goal line 
+        # away
+        self.goal_rect_x_away = 0.275
+        self.goal_rect_y_min_away = -0.09
+        self.goal_rect_y_max_away = 0.09
+        self.goal_rect_z_min_away = 0.00
+        self.goal_rect_z_max_away = 0.10
+        self.goalie_x_away = 0.172  # slightly in front of goal line
 
         # Debug markers (goal corners)
         if self.use_gui:
