@@ -84,7 +84,7 @@ class _FoosballSimCore:
         p.setGravity(0, 0, -9.81)
 
         # Physics engine parameters (substeps + CCD friendliness)
-        base_kwargs = dict(enableConeFriction=1, numSolverIterations=150)
+        base_kwargs = dict(enableConeFriction=1, numSolverIterations=100)
         try:
             p.setPhysicsEngineParameter(**base_kwargs, numSubSteps=self.num_substeps)
         except TypeError:
@@ -304,7 +304,9 @@ class _FoosballSimCore:
     def reset_robot(self) -> None:
         self._reset_robot_to_values(0.0, 0.0, 0.0, self.opponent_kicker_offset)
 
-    def reset_robot_randomized(self, rng: random.Random) -> None:
+    def reset_robot_randomized(self, rng: random.Random | None = None) -> None:
+        if rng is None:
+            rng = self.rng
         def sample_in_limits(lim: JointLimits) -> float:
             return rng.uniform(lim.lower, lim.upper)
 
@@ -504,19 +506,22 @@ class _FoosballSimCore:
         s_cap = self.slider_vel_cap if slider_vel_cap is None else float(abs(slider_vel_cap))
         k_cap = self.kicker_vel_cap if kicker_vel_cap is None else float(abs(kicker_vel_cap))
 
-        s_force = float(self.slider_limits.effort) if slider_force is None else float(abs(slider_force))
-        k_force = float(self.kicker_limits.effort) if kicker_force is None else float(abs(kicker_force))
+        # s_force = float(self.slider_limits.effort) if slider_force is None else float(abs(slider_force))
+        # k_force = float(self.kicker_limits.effort) if kicker_force is None else float(abs(kicker_force))
 
         # Clamp targets to joint limits
         slider_target = self._clamp_to_limits(float(slider_target), self.slider_limits)
         kicker_target = self._clamp_to_limits(float(kicker_target), self.kicker_limits)
+        # print("Applying action targets: slider_target =", slider_target, "kicker_target =", kicker_target)
+        # print("With caps: s_cap =", s_cap, "k_cap =", k_cap, "s_force =", s_force, "k_force =", k_force)
+        # print("Joint limits: slider_limits =", self.slider_limits, "kicker_limits =", self.kicker_limits)
 
         p.setJointMotorControl2(
             self.robot_uid,
             self.slider_idx,
             controlMode=p.POSITION_CONTROL,
             targetPosition=float(slider_target),
-            force=s_force,
+            # force=s_force,
             maxVelocity=float(s_cap),
         )
         p.setJointMotorControl2(
@@ -524,7 +529,7 @@ class _FoosballSimCore:
             self.kicker_idx,
             controlMode=p.POSITION_CONTROL,
             targetPosition=float(kicker_target),
-            force=k_force,
+            # force=k_force,
             maxVelocity=float(k_cap),
         )
 
@@ -1333,7 +1338,7 @@ class _FoosballSimCore:
         kicker_idx: Optional[int],
         counter_attr: str,
     ) -> bool:
-        defense_zone = abs(x - goal_x) < 0.12
+        defense_zone = abs(x - goal_x) < 0.15
 
         # Contact with player link (if provided)
         had_contact = False
@@ -1343,20 +1348,19 @@ class _FoosballSimCore:
 
         # Stop condition (sustained)
         steps = getattr(self, counter_attr)
-        if defense_zone and speed < 0.08:
+        if defense_zone and speed < 0.1:
             steps += 1
         else:
             steps = 0
         setattr(self, counter_attr, steps)
 
-        if steps >= 10:
+        if steps >= 5:
             return True
 
         # Basic "reversal" heuristic: if ball is near goal plane and velocity now points away from goal.
-        if defense_zone:
-            toward_goal = (goal_x < x and vx < -0.08) or (goal_x > x and vx > 0.08)
-            if not toward_goal and abs(vx) > 0.12:
-                return True
+        toward_goal = (goal_x < x and vx < -0.08) or (goal_x > x and vx > 0.08)
+        if not toward_goal and abs(vx) > 0.1:
+            return True
 
         # Contact-based block (immediate)
         if defense_zone and had_contact:

@@ -1,6 +1,7 @@
 from typing import Optional, Tuple, Dict, Any
 from collections import deque
 import time
+import math
 
 import numpy as np
 
@@ -34,7 +35,7 @@ class FoosballGoalieEnv(gym.Env):
         # control rates
         policy_hz: float = 20.0,
         sim_hz: int = 1000,  # set to 2000 if desired
-        max_episode_steps: int = 1500,
+        max_episode_steps: int = 100,
         seed: Optional[int] = None,
         num_substeps: int = 8,
         # shot params
@@ -90,17 +91,17 @@ class FoosballGoalieEnv(gym.Env):
         # [-1,1]^4
         self.action_space = spaces.Box(low=-1.0, high=1.0, shape=(4,), dtype=np.float32)
 
-        # obs: 11 dims as before
-        self.observation_space = spaces.Box(low=-np.inf, high=np.inf, shape=(11,), dtype=np.float32)
+        # obs: 15 dims (est pos/vel/pred_pos + joints + intercept features)
+        self.observation_space = spaces.Box(low=-np.inf, high=np.inf, shape=(15,), dtype=np.float32)
 
         # sim core
         self.sim = _FoosballSimCore(
             use_gui=(render_mode == "human"),
             time_step=self.dt_sim,   # <-- sim runs at 1000/2000 Hz
             seed=seed,
-            ball_restitution=0.5,
+            ball_restitution=0.8,
             table_restitution=0.5,
-            wall_restitution=0.5,
+            wall_restitution=0.8,
             add_wall_catchers=False,
             num_substeps=int(num_substeps),
         )
@@ -136,7 +137,7 @@ class FoosballGoalieEnv(gym.Env):
         self._terminated_event = None
 
         self.sim.remove_ball()
-        self.sim.reset_robot()
+        self.sim.reset_robot_randomized()
 
         shot_info = self.sim.spawn_shot_random(self.speed_min, self.speed_max, self.bounce_prob)
 
@@ -201,7 +202,7 @@ class FoosballGoalieEnv(gym.Env):
             self._debug_goal_intercept(intercept)
 
             if self.render_mode == "human" and self.real_time_gui:
-                time.sleep(self.dt_sim)
+                time.sleep(self.dt_sim / 2)
 
             if self.sim.check_goal_crossing():
                 terminated = True
@@ -293,6 +294,71 @@ class FoosballGoalieEnv(gym.Env):
             main_len = float(np.linalg.norm(main_vec))
             step_len = float(np.linalg.norm(step_vec))
 
+            # Detect a wall bounce from the latest segment alone (robust against long history).
+            y_min_wall = float(self.sim.table_min_local[1] + self.sim.ball_radius + 0.001)
+            y_max_wall = float(self.sim.table_max_local[1] - self.sim.ball_radius - 0.001)
+            y0 = float(last_pos[1])
+            y1 = float(pos[1])
+            bounce_wall_y: Optional[float] = None
+            if (y0 < y_min_wall and y1 >= y_min_wall) or (y0 > y_min_wall and y1 <= y_min_wall):
+                bounce_wall_y = y_min_wall
+            if (y0 < y_max_wall and y1 >= y_max_wall) or (y0 > y_max_wall and y1 <= y_max_wall):
+                # If both bounds are crossed (numerical glitch), prefer the first hit along the segment.
+                if bounce_wall_y is None:
+                    bounce_wall_y = y_max_wall
+
+            if bounce_wall_y is not None and abs(float(step_vec[1])) > 1e-6:
+                # Rebase history at the rebound point so the line fit uses only the post-bounce path.
+                t_hit = float((bounce_wall_y - y0) / float(step_vec[1]))
+                t_hit = max(0.0, min(1.0, t_hit))
+                bounce_pos = last_pos + step_vec * t_hit
+                dt_post = max(dt_eff * (1.0 - t_hit), 1e-6)
+                self._vel_win.clear()
+                self._pos_hist = [(0.0, bounce_pos.astype(np.float32))]
+                self._vel_win.append((0.0, bounce_pos.astype(np.float32)))
+                self._pos_hist.append((dt_post, pos.copy()))
+                vel_post = (pos - bounce_pos) / dt_post
+                self._est_pos = pos.copy()
+                self._est_vel = vel_post.astype(np.float32)
+                self._pred_pos = (self._est_pos + self._est_vel * float(self.dt_eff)).astype(np.float32)
+                self.sim.set_estimated_ball_state(self._est_pos, self._est_vel)
+                return
+
+            # Explicit wall-bounce detection on X/Y (ignore Z since we stay on the surface).
+            if len(self._pos_hist) >= 2:
+                prev_pos = self._pos_hist[-2][1]
+                dx_prev = float(last_pos[0] - prev_pos[0])
+                dy_prev = float(last_pos[1] - prev_pos[1])
+                dx_now = float(step_vec[0])
+                dy_now = float(step_vec[1])
+
+                x_min = float(self.sim.table_min_local[0] + self.sim.ball_radius + 0.002)
+                x_max = float(self.sim.table_max_local[0] - self.sim.ball_radius - 0.002)
+                y_min = float(self.sim.table_min_local[1] + self.sim.ball_radius + 0.002)
+                y_max = float(self.sim.table_max_local[1] - self.sim.ball_radius - 0.002)
+
+                near_x_wall = (abs(float(last_pos[0]) - x_min) < 0.01) or (abs(float(last_pos[0]) - x_max) < 0.01)
+                near_y_wall = (abs(float(last_pos[1]) - y_min) < 0.01) or (abs(float(last_pos[1]) - y_max) < 0.01)
+
+                bounced_x = near_x_wall and (dx_prev * dx_now < -1e-6) and abs(dx_prev) > 1e-4 and abs(dx_now) > 1e-4
+                bounced_y = near_y_wall and (dy_prev * dy_now < -1e-6) and abs(dy_prev) > 1e-4 and abs(dy_now) > 1e-4
+
+                if bounced_x or bounced_y:
+                    axis = "x" if bounced_x else "y"
+                    # print(
+                    #     f"[Estimator] reset: wall bounce on {axis}, "
+                    #     f"dx_prev={dx_prev:.4f}, dx_now={dx_now:.4f}, "
+                    #     f"dy_prev={dy_prev:.4f}, dy_now={dy_now:.4f}, "
+                    #     f"pos=({last_pos[0]:.4f},{last_pos[1]:.4f})"
+                    # )
+                    self._vel_win.clear()
+                    self._pos_hist = [(0.0, pos.copy())]
+                    self._est_pos = pos.copy()
+                    self._est_vel[:] = 0.0
+                    self._pred_pos = pos.copy()
+                    self.sim.set_estimated_ball_state(self._est_pos, self._est_vel)
+                    return
+
             dir_flip = False
             if main_len > 1e-6 and step_len > 1e-6:
                 dir_flip = float(np.dot(step_vec, main_vec)) < -1e-4
@@ -315,11 +381,11 @@ class FoosballGoalieEnv(gym.Env):
             allow_reset = (avg_speed >= speed_tol and travel >= min_travel_for_reset)
 
             if allow_reset and len(self._pos_hist) >= 3 and (dir_flip or line_deviation):
-                print(
-                    f"[Estimator] reset: dir_flip={dir_flip}, line_dev={line_deviation}, "
-                    f"step_speed={step_speed:.3f} m/s, avg_speed={avg_speed:.3f} m/s, "
-                    f"travel={travel:.3f} m, dev={dev:.4f}, dev_tol={noise_tol:.4f}"
-                )
+                # print(
+                #     f"[Estimator] reset: dir_flip={dir_flip}, line_dev={line_deviation}, "
+                #     f"step_speed={step_speed:.3f} m/s, avg_speed={avg_speed:.3f} m/s, "
+                #     f"travel={travel:.3f} m, dev={dev:.4f}, dev_tol={noise_tol:.4f}"
+                # )
                 self._vel_win.clear()
                 self._pos_hist = [(0.0, pos.copy())]
                 self._est_pos = pos.copy()
@@ -371,12 +437,23 @@ class FoosballGoalieEnv(gym.Env):
 
     def _get_obs(self) -> np.ndarray:
         slider_pos, kicker_pos = self.sim.get_joint_positions()
+        intercept = self._predict_goal_intercept_est()
+        if intercept is None:
+            y_hit = 0.0
+            z_hit = 0.0
+            t_hit = 0.0
+            intercept_flag = 0.0
+        else:
+            y_hit, z_hit, _x_plane, t_hit = intercept
+            intercept_flag = 1.0
+
         obs = np.concatenate(
             [
                 self._est_pos.astype(np.float32),
                 self._est_vel.astype(np.float32),
                 self._pred_pos.astype(np.float32),
                 np.array([kicker_pos, slider_pos], dtype=np.float32),
+                np.array([y_hit, z_hit, t_hit, intercept_flag], dtype=np.float32),
             ],
             axis=0,
         )
@@ -386,7 +463,7 @@ class FoosballGoalieEnv(gym.Env):
     # Reward / info (unchanged)
     # ----------------------------
 
-    def _predict_goal_intercept_est(self) -> Optional[Tuple[float, float, float]]:
+    def _predict_goal_intercept_est(self) -> Optional[Tuple[float, float, float, float]]:
         if self.sim.ball_id is None:
             return None
 
@@ -405,6 +482,7 @@ class FoosballGoalieEnv(gym.Env):
         y_min = float(self.sim.table_min_local[1] + self.sim.ball_radius)
         y_max = float(self.sim.table_max_local[1] - self.sim.ball_radius)
 
+        t_accum = 0.0
         for _ in range(2):
             t_goal = (x_goal - x) / vx
             if t_goal <= 0.0:
@@ -419,11 +497,13 @@ class FoosballGoalieEnv(gym.Env):
                 y = y_max if vy > 0 else y_min
                 z += vz * t_wall
                 vy = -vy
+                t_accum += t_wall
                 continue
 
             y_hit = y + vy * t_goal
             z_hit = z + vz * t_goal
-            return (y_hit, z_hit, x_goal)
+            t_accum += t_goal
+            return (y_hit, z_hit, x_goal, t_accum)
 
         return None
 
@@ -435,59 +515,93 @@ class FoosballGoalieEnv(gym.Env):
             return 0.0
 
         self._intercept_available = True
-        y_pred, z_pred, _ = intercept
+        y_pred, z_pred, x_plane, _t_hit = intercept
 
-        # Reward box (fixed to goal plane, no rotation).
-        player_y_half = float(self.sim.get_player_y_halfwidth())
-        denom = max(player_y_half + float(self.sim.ball_radius), 1e-6)
-        y_min = y_pred - denom
-        y_max = y_pred + denom
-        z_span = float(self.sim.goal_rect_z_max - self.sim.goal_rect_z_min)
-        z_min = z_pred - 0.5 * z_span - 0.02
-        z_max = z_pred + 0.5 * z_span + 0.05
+        # Flatten path in Z: keep current estimated height and ignore vertical velocity.
+        z_flat = float(self._est_pos[2])
 
-        reward_x = float(self.sim.goalie_x)
-        if float(self._est_pos[0]) < float(self.sim.goalie_x) - float(self.sim.ball_radius):
-            reward_x = float(self.sim.goal_rect_x)
-
-        reward_half = np.array(
-            [0.010, 1.1 * (y_max - y_min), 1.1 * (z_max - z_min)],
-            dtype=np.float32,
-        )
-        reward_center = np.array(
-            [reward_x, 0.5 * (y_min + y_max), 0.5 * (z_min + z_max)],
-            dtype=np.float32,
-        )
-
-        # Toe box (same as debug anchor).
-        toe_center, toe_half = self.sim._get_player_toebox(home=True)
-        toe_half = np.array(toe_half, dtype=np.float32)
-
-        # Overlap test (axis-aligned in table-local frame).
-        delta = np.abs(reward_center - toe_center)
-        overlap = (reward_half + toe_half) - delta
-        if np.any(overlap <= 0.0):
+        vx, vy, vz = map(float, self._est_vel)
+        vz = 0.0
+        if vx >= -1e-4:
             return 0.0
 
-        overlap_frac = float(
-            (overlap[0] / (2.0 * reward_half[0]))
-            * (overlap[1] / (2.0 * reward_half[1]))
-            * (overlap[2] / (2.0 * reward_half[2]))
-        )
-        center_dist_norm = float(np.linalg.norm(delta / (reward_half + 1e-6)))
-        closeness = max(0.0, 1.0 - center_dist_norm)
+        # Compute path segment from goalie plane to goal plane using estimated velocity.
+        x_goalie = float(self.sim.goalie_x)
+        x_goal = float(self.sim.goal_rect_x)
+        x0, y0, z0 = map(float, self._est_pos)
+        z0 = z_flat
 
-        # Blend overlap and center closeness; scale similar to prior dense.
-        return 0.1 * float(0.5 * overlap_frac + 0.5 * closeness)
+        # Parametric times to planes.
+        t_goalie = (x_goalie - x0) / vx
+        t_goal_line = (x_goal - x0) / vx
+        if t_goalie <= 0.0:
+            return 0.0
 
-    def _debug_goal_intercept(self, intercept: Optional[Tuple[float, float, float]]) -> None:
+        # Ensure goal plane time is after goalie plane along travel.
+        if t_goal_line <= t_goalie:
+            t_goal_line = t_goalie + 0.05
+
+        start = np.array([x0 + vx * t_goalie, y0 + vy * t_goalie, z0 + vz * t_goalie], dtype=np.float32)
+        end = np.array([x0 + vx * t_goal_line, y0 + vy * t_goal_line, z0 + vz * t_goal_line], dtype=np.float32)
+        seg_dir = end - start
+        seg_len = float(np.linalg.norm(seg_dir))
+        if seg_len < 1e-6:
+            return 0.0
+        seg_dir /= seg_len
+
+        toe_center, toe_half = self.sim._get_player_toebox(home=True)
+        toe_center = toe_center.astype(np.float32)
+        toe_half = np.asarray(toe_half, dtype=np.float32)
+
+        # Closest point on segment to toe.
+        rel = toe_center - start
+        t_proj = float(np.dot(rel, seg_dir))
+        t_clamped = max(0.0, min(seg_len, t_proj))
+        closest = start + seg_dir * t_clamped
+        dist = float(np.linalg.norm(toe_center - closest))
+        # Account for toe box size by shrinking the distance.
+        toe_radius = float(np.linalg.norm(toe_half))  # spherical approximation of toe extents
+        dist = max(0.0, dist)
+
+        # Use the same y/z tolerances as before to scale decay.
+        player_y_half = float(self.sim.get_player_y_halfwidth())
+        denom = max(player_y_half + float(self.sim.ball_radius), 1e-6)
+        z_span = float(self.sim.goal_rect_z_max - self.sim.goal_rect_z_min)
+        z_tol = 0.5 * z_span + 0.05
+        tol = max(denom, z_tol, toe_radius, 1.0)
+
+        # Distance along path (meters).
+        d = dist
+        close_cutoff = 0.05  # 5 cm
+
+        # Fine reward: only inside 5 cm, exponential shaped to be 1.0 at d=0 and 0.0 at d=close_cutoff.
+        fine_decay = max(close_cutoff * 0.4, 1e-3)  # steeper inside the close band
+        base = math.exp(-close_cutoff / fine_decay)
+        fine_raw = math.exp(-d / fine_decay)
+        fine = 0.0
+        if d <= close_cutoff:
+            fine = float(max(0.0, (fine_raw - base) / max(1.0 - base, 1e-6)))
+        # Cap fine at 1.0 by construction.
+
+        # Coarse reward: exponential toward 0.5, peaked once you are within 5 cm (flat-top after that).
+        coarse_decay = max(close_cutoff * 0.6, 1e-3)
+        if d <= close_cutoff:
+            coarse = 0.1
+        else:
+            coarse = float(0.1 * math.exp(-(d - close_cutoff) / coarse_decay))
+
+        return fine + coarse
+
+    def _debug_goal_intercept(self, intercept: Optional[Tuple[float, float, float, float]]) -> None:
         if self.render_mode != "human":
             return
         if intercept is None:
             self.sim.set_goal_intercept_debug(None, None)
             return
-        y_pred, z_pred, x_plane = intercept
+        y_pred, z_pred, x_plane, _t_hit = intercept
+        # Flatten the visual path onto the XY plane (ignore vertical component).
         v_dir = self._est_vel.astype(np.float32)
+        v_dir[2] = 0.0
         self.sim.set_goal_intercept_debug(float(y_pred), float(z_pred), float(x_plane), tuple(v_dir))
         # print(f"Predicted intercept at y={y_pred:.3f}, z={z_pred:.3f}")
 
@@ -495,11 +609,11 @@ class FoosballGoalieEnv(gym.Env):
         dense = self._dense_alignment_reward()
         sparse = 0.0
         if event == "block":
-            sparse += 0.5
+            sparse += 10.0
         elif event == "goal":
             sparse -= 10.0
         elif event == "out":
-            sparse -= 10.0
+            sparse -= 2.0
         return float(dense + sparse)
 
     def _get_info(self, event: Optional[str]) -> Dict[str, Any]:
@@ -508,6 +622,17 @@ class FoosballGoalieEnv(gym.Env):
         slider_pos, kicker_pos = self.sim.get_joint_positions()
 
         (spos, kpos), (svel, kvel) = self.sim.get_joint_positions_and_vels()
+        intercept = self._predict_goal_intercept_est()
+        if intercept is None:
+            intercept_dict = None
+        else:
+            y_hit, z_hit, x_plane, t_hit = intercept
+            intercept_dict = {
+                "y": float(y_hit),
+                "z": float(z_hit),
+                "x_plane": float(x_plane),
+                "t_hit": float(t_hit),
+            }
 
         return {
             "event": event,
@@ -522,6 +647,7 @@ class FoosballGoalieEnv(gym.Env):
             "slider_vel": float(svel),
             "kicker_vel": float(kvel),
             "intercept_available": bool(self._intercept_available),
+            "intercept_pred": intercept_dict,
             "dt_sim": float(self.dt_sim),
             "dt_policy": float(self.dt_policy),
             "steps_per_policy": int(self.steps_per_policy),

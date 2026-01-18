@@ -1,16 +1,16 @@
 """
-Load and watch the best PPO model trained on FoosballGoalieEnv.
+Load and watch a SAC model trained on FoosballGoalieEnv.
 
 Examples:
-  python watch_best_sac_foosball.py --run_dir ./ppo_foosball_20260110_123456
-  python watch_best_sac_foosball.py --model ./ppo_foosball_20260110_123456/best/best_model.zip
+  python watch_best_sac_foosball.py --run_dir ./sac_foosball_20260110_123456
+  python watch_best_sac_foosball.py --model ./sac_foosball_20260110_123456/best/best_model.zip
 
 Optional video:
   python watch_best_sac_foosball.py --run_dir ./sac_foosball_... --record_mp4
 
 Notes:
-- This uses render_mode="human" (PyBullet GUI).
-- It prints episode outcomes (goal/block/out) using info["event"] from your env.
+- Uses render_mode="human" (PyBullet GUI).
+- Prints episode outcomes (goal/block/out) using info["event"] from the env.
 """
 
 import os
@@ -58,12 +58,15 @@ def main():
     parser.add_argument("--seed", type=int, default=0)
 
     # Env params (should match training unless you intentionally domain-randomize)
-    parser.add_argument("--speed_min", type=float, default=2.0)
-    parser.add_argument("--speed_max", type=float, default=10.0)
+    parser.add_argument("--speed_min", type=float, default=8.0)
+    parser.add_argument("--speed_max", type=float, default=15.0)
     parser.add_argument("--bounce_prob", type=float, default=0.25)
-    parser.add_argument("--action_repeat", type=int, default=8)
+    parser.add_argument("--policy_hz", type=float, default=20.0)
+    parser.add_argument("--sim_hz", type=int, default=1000)
+    parser.add_argument("--num_substeps", type=int, default=8)
     parser.add_argument("--max_episode_steps", type=int, default=1500)
-    parser.add_argument("--time_step", type=float, default=1.0 / 240.0)
+    parser.add_argument("--slider_vel_cap_mps", type=float, default=15.0)
+    parser.add_argument("--kicker_vel_cap_rads", type=float, default=170.0)
 
     # Optional recording
     parser.add_argument("--record_mp4", action="store_true", help="Record MP4 using PyBullet state logging.")
@@ -78,12 +81,16 @@ def main():
     env = FoosballGoalieEnv(
         render_mode="human",
         seed=args.seed,
-        time_step=args.time_step,
-        action_repeat=args.action_repeat,
+        policy_hz=args.policy_hz,
+        sim_hz=args.sim_hz,
+        num_substeps=args.num_substeps,
         max_episode_steps=args.max_episode_steps,
         speed_min=args.speed_min,
         speed_max=args.speed_max,
         bounce_prob=args.bounce_prob,
+        slider_vel_cap_mps=args.slider_vel_cap_mps,
+        kicker_vel_cap_rads=args.kicker_vel_cap_rads,
+        real_time_gui=True,
     )
 
     # Load model

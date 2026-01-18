@@ -198,7 +198,7 @@ def main():
     model = SAC(
         policy="MlpPolicy",
         env=train_venv,
-        verbose=1,
+        verbose=0,
         tensorboard_log=tb_dir,
         device=args.device,
         learning_rate=3e-4,
@@ -211,6 +211,7 @@ def main():
         gradient_steps=1,
         ent_coef="auto",
     )
+    # model = SAC.load('/Users/samvance/vscode projects/Foosball_RL/sac_foosball_20260117_183329/checkpoints/sac_1500000_steps.zip', env=train_venv, device=args.device, buffer_size=5_000_000, tensorboard_log=tb_dir, learning_rate=5e-4, batch_size=256, train_freq=(1, "step"), gradient_steps=1, verbose=0)
 
     # -------- Callbacks --------
     checkpoint_cb = CheckpointCallback(
