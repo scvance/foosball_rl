@@ -606,7 +606,7 @@ class FoosballGoalieEnv(gym.Env):
         # print(f"Predicted intercept at y={y_pred:.3f}, z={z_pred:.3f}")
 
     def _get_reward(self, event: Optional[str]) -> float:
-        dense = self._dense_alignment_reward()
+        dense = 0.0 # self._dense_alignment_reward()
         sparse = 0.0
         if event == "block":
             sparse += 10.0

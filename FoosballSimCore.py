@@ -652,6 +652,7 @@ class _FoosballSimCore:
         Returns dict with the chosen parameters (for debugging).
         """
         self.remove_ball()
+        # breakpoint()
 
         margin = self.ball_radius + 0.02
         x_min, y_min, _ = self.table_min_local
