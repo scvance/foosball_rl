@@ -15,7 +15,7 @@ class FoosballVersusEnv(gym.Env):
     """
     Two-goalie self-play environment.
     - Action: Dict with {"home": [slider, kicker], "away": [slider, kicker]} in [-1, 1]
-    - Observation per side: ball est pos/vel/pred (9) + own joints (2) + opp joints (2) => 13 dims
+    - Observation per side: ball est pos/vel/pred (9) + own joints (4) + opp joints (4) + intercept (4) => 21 dims
     - Reward: basic zero-sum placeholder (you can swap in your own later).
     """
 
@@ -86,8 +86,8 @@ class FoosballVersusEnv(gym.Env):
         # [-1,1]^4
         act_box = spaces.Box(low=-1.0, high=1.0, shape=(4,), dtype=np.float32)
         self.action_space = spaces.Dict({"home": act_box, "away": act_box})
-        # obs: 15 dims (est pos/vel/pred_pos + joints + intercept features)
-        obs_box = spaces.Box(low=-np.inf, high=np.inf, shape=(15,), dtype=np.float32)
+        # obs: 21 dims (est pos/vel/pred_pos + own joints + opp joints + intercept features)
+        obs_box = spaces.Box(low=-np.inf, high=np.inf, shape=(21,), dtype=np.float32)
         self.observation_space = spaces.Dict({"home": obs_box, "away": obs_box})
 
         # sim core
@@ -164,18 +164,29 @@ class FoosballVersusEnv(gym.Env):
 
         self._episode_step += 1
 
-        # map action [-1,1] to joint ranges
-        home_slider_target = self._interp_action(a_home[0], self.sim.slider_limits)
-        home_slider_vel = self._interp_velocity(a_home[1], self.sim.slider_limits)
-        home_kicker_target = self._interp_action(a_home[2], self.sim.kicker_limits)
-        home_kicker_vel = self._interp_velocity(a_home[3], self.sim.kicker_limits)
+        # map action [-1,1] to joint ranges (positions) and velocity caps
+        h_sp = float(np.clip(a_home[0], -1.0, 1.0))
+        h_sv = float(np.clip(a_home[1], -1.0, 1.0))
+        h_kp = float(np.clip(a_home[2], -1.0, 1.0))
+        h_kv = float(np.clip(a_home[3], -1.0, 1.0))
+
+        home_slider_target = self._interp_action(h_sp, self.sim.slider_limits)
+        home_kicker_target = self._interp_action(h_kp, self.sim.kicker_limits)
+        home_slider_vel = (h_sv + 1.0) * 0.5 * self.slider_vel_cap_mps
+        home_kicker_vel = (h_kv + 1.0) * 0.5 * self.kicker_vel_cap_rads
 
         opp_slider_limits = self.sim.opponent_slider_limits
         opp_kicker_limits = self.sim.opponent_kicker_limits
-        away_slider_target = self._interp_action(a_away[0], opp_slider_limits)
-        away_slider_vel = self._interp_velocity(a_away[1], opp_slider_limits)
-        away_kicker_target = self._interp_action(a_away[2], opp_kicker_limits)
-        away_kicker_vel = self._interp_velocity(a_away[3], opp_kicker_limits)
+
+        a_sp = float(np.clip(a_away[0], -1.0, 1.0))
+        a_sv = float(np.clip(a_away[1], -1.0, 1.0))
+        a_kp = float(np.clip(a_away[2], -1.0, 1.0))
+        a_kv = float(np.clip(a_away[3], -1.0, 1.0))
+
+        away_slider_target = self._interp_action(a_sp, opp_slider_limits)
+        away_kicker_target = self._interp_action(a_kp, opp_kicker_limits)
+        away_slider_vel = (a_sv + 1.0) * 0.5 * self.slider_vel_cap_mps
+        away_kicker_vel = (a_kv + 1.0) * 0.5 * self.kicker_vel_cap_rads
 
         self.sim.apply_action_targets_dual(
             home_slider_target,
@@ -230,6 +241,10 @@ class FoosballVersusEnv(gym.Env):
                 event = "out"
                 out_reason = reason
                 break
+            if self._detect_stalled_ball():
+                truncated = True
+                event = "stalled"
+                break
 
         if event is None and last_block_event is not None:
             event = last_block_event
@@ -250,6 +265,15 @@ class FoosballVersusEnv(gym.Env):
     # ----------------------------
     # Observation / estimator
     # ----------------------------
+
+    def _detect_stalled_ball(self) -> bool:
+        ball_pos, ball_vel = self.sim.get_ball_true_local_pos_vel()
+        # ensure the ball is at least 5 cm away from the goalie xs
+        goalie_x = self.sim.goalie_x
+        goalie_x_away = self.sim.goalie_x_away
+        min_dist_from_goalie = 0.05 + self.sim.ball_radius
+        dist_from_goalie = min(abs(float(ball_pos[0]) - goalie_x), abs(float(ball_pos[0]) - goalie_x_away))
+        return dist_from_goalie < min_dist_from_goalie and float(np.linalg.norm(ball_vel)) < 0.02
 
     def _sample_noisy_ball_pos_local(self) -> np.ndarray:
         pos_true, _ = self.sim.get_ball_true_local_pos_vel()

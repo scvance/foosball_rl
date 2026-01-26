@@ -16,11 +16,23 @@ def main():
     parser.add_argument("--home_model", type=str, required=True)
     parser.add_argument("--away_model", type=str, required=True)
     parser.add_argument("--episodes", type=int, default=5)
-    parser.add_argument("--action_repeat", type=int, default=2)
     parser.add_argument("--serve_side", type=str, default="random", choices=["home", "away", "random"])
+    parser.add_argument("--policy_hz", type=float, default=200.0, help="Policy control rate (Hz).")
+    parser.add_argument("--sim_hz", type=int, default=1000, help="Simulation rate (Hz).")
+    parser.add_argument("--slider_vel_cap_mps", type=float, default=20.0)
+    parser.add_argument("--kicker_vel_cap_rads", type=float, default=170.0)
+    parser.add_argument("--seed", type=int, default=0)
     args = parser.parse_args()
 
-    env = FoosballVersusEnv(render_mode="human", action_repeat=args.action_repeat, serve_side=args.serve_side)
+    env = FoosballVersusEnv(
+        render_mode="human",
+        serve_side=args.serve_side,
+        policy_hz=args.policy_hz,
+        sim_hz=args.sim_hz,
+        slider_vel_cap_mps=args.slider_vel_cap_mps,
+        kicker_vel_cap_rads=args.kicker_vel_cap_rads,
+        seed=args.seed,
+    )
     model_home = SAC.load(args.home_model, device="auto")
     model_away = SAC.load(args.away_model, device="auto")
 

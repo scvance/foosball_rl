@@ -56,6 +56,7 @@ def build_model(name: str, obs_space, act_space, device: str, lr: float, tensorb
         policy="MlpPolicy",
         env=dummy_env,
         learning_rate=lr,
+        batch_size=64,
         device=device,
         verbose=1,
         tensorboard_log=tensorboard,
@@ -85,23 +86,32 @@ def add_transition(model: SAC, obs, action, reward, next_obs, done: bool, trunca
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--total_steps", type=int, default=200_000)
+    parser.add_argument("--total_steps", type=int, default=2_000_000)
     parser.add_argument("--learning_starts", type=int, default=5_000)
     parser.add_argument("--train_freq", type=int, default=1_000)
     parser.add_argument("--gradient_steps", type=int, default=1_000)
-    parser.add_argument("--batch_size", type=int, default=256)
+    parser.add_argument("--batch_size", type=int, default=64)
     parser.add_argument("--device", type=str, default="auto")
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--save_dir", type=str, default="selfplay_models")
-    parser.add_argument("--save_every", type=int, default=50_000)
+    parser.add_argument("--save_every", type=int, default=100_000)
     parser.add_argument("--lr", type=float, default=3e-4)
+    parser.add_argument("--policy_hz", type=float, default=200.0, help="Policy update frequency (Hz).")
+    parser.add_argument("--sim_hz", type=int, default=1000, help="Simulation frequency (Hz).")
     args = parser.parse_args()
 
     set_random_seed(args.seed)
     os.makedirs(args.save_dir, exist_ok=True)
 
     # Env
-    env = FoosballVersusEnv(render_mode="none", serve_side="random", seed=args.seed)
+    env = FoosballVersusEnv(
+        render_mode="none",
+        serve_side="random",
+        seed=args.seed,
+        policy_hz=args.policy_hz,
+        sim_hz=args.sim_hz,
+        max_episode_steps=3000,
+    )
     obs_space = env.observation_space["home"]
     act_space = env.action_space["home"]
 
