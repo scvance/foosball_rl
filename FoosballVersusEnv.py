@@ -42,6 +42,8 @@ class FoosballVersusEnv(gym.Env):
         # GUI pacing
         real_time_gui: bool = True,
         serve_side: str = "random",  # 'home' | 'away' | 'random'
+        # reward shaping
+        use_dense_rewards: bool = True,
     ):
         super().__init__()
 
@@ -81,6 +83,8 @@ class FoosballVersusEnv(gym.Env):
         self.kicker_vel_cap_rads = float(kicker_vel_cap_rads)
 
         self.real_time_gui = bool(real_time_gui)
+        
+        self.use_dense_rewards = bool(use_dense_rewards)
 
         # Action now includes pos+vel for slider+kicker
         # [-1,1]^4
@@ -116,6 +120,10 @@ class FoosballVersusEnv(gym.Env):
         self._block_count = 0
         self._out_count = 0
         self._intercept_available = False
+        
+        # Track whether we've already rewarded a block this "attack"
+        # Reset when ball starts moving toward the goal again
+        self._block_rewarded = {"home": False, "away": False}
 
         # HUD
         if self.render_mode == "human":
@@ -137,6 +145,9 @@ class FoosballVersusEnv(gym.Env):
 
         self._episode_step = 0
         self._terminated_event = None
+        
+        # Reset block reward tracking for new episode
+        self._block_rewarded = {"home": False, "away": False}
 
         # reset sim
         self.sim.remove_ball()
@@ -203,7 +214,7 @@ class FoosballVersusEnv(gym.Env):
         truncated = False
         event = None
         out_reason = ""
-        last_block_event = None
+        block_events = {"home": False, "away": False}
 
         last_contacts = {"home": False, "away": False}
         for _ in range(self.steps_per_policy):
@@ -232,10 +243,11 @@ class FoosballVersusEnv(gym.Env):
                 terminated = True
                 event = "away_goal"
                 break
+            # Track both block events (not just the last one)
             if blocks.get("home", False):
-                last_block_event = "home_block"
+                block_events["home"] = True
             if blocks.get("away", False):
-                last_block_event = "away_block"
+                block_events["away"] = True
             if out:
                 truncated = True
                 event = "out"
@@ -246,11 +258,18 @@ class FoosballVersusEnv(gym.Env):
                 event = "stalled"
                 break
 
-        if event is None and last_block_event is not None:
-            event = last_block_event
+        # If no terminal event, report block events (prioritize based on who blocked)
+        if event is None:
+            if block_events["home"] and block_events["away"]:
+                # Both blocked - could happen in rapid exchange; report both via info
+                event = "both_block"
+            elif block_events["home"]:
+                event = "home_block"
+            elif block_events["away"]:
+                event = "away_block"
 
         self._terminated_event = event
-        rewards = self._get_rewards(event, last_contacts)
+        rewards = self._get_rewards(event, last_contacts, block_events)
 
         if self._episode_step >= self.max_episode_steps:
             truncated = True
@@ -259,6 +278,7 @@ class FoosballVersusEnv(gym.Env):
         info = self._get_info(event)
         if event == "out":
             info["out_reason"] = out_reason
+        info["block_events"] = block_events
 
         return obs, rewards, bool(terminated), bool(truncated), info
 
@@ -273,7 +293,8 @@ class FoosballVersusEnv(gym.Env):
         goalie_x_away = self.sim.goalie_x_away
         min_dist_from_goalie = 0.05 + self.sim.ball_radius
         dist_from_goalie = min(abs(float(ball_pos[0]) - goalie_x), abs(float(ball_pos[0]) - goalie_x_away))
-        return dist_from_goalie < min_dist_from_goalie and float(np.linalg.norm(ball_vel)) < 0.02
+        # Increased threshold from 0.02 to 0.05 to avoid premature stall detection
+        return dist_from_goalie < min_dist_from_goalie and float(np.linalg.norm(ball_vel)) < 0.05
 
     def _sample_noisy_ball_pos_local(self) -> np.ndarray:
         pos_true, _ = self.sim.get_ball_true_local_pos_vel()
@@ -540,7 +561,10 @@ class FoosballVersusEnv(gym.Env):
         if x <= goalie_x - float(self.sim.ball_radius):
             x_goal = goal_rect_x
         else:
-            x_goal = float(self.sim.goalie_x)
+            # FIX: Use the local `goalie_x` variable instead of `self.sim.goalie_x`
+            # so that away side uses the correct goalie position
+            x_goal = goalie_x
+            
         y_min = float(self.sim.table_min_local[1] + self.sim.ball_radius)
         y_max = float(self.sim.table_max_local[1] - self.sim.ball_radius)
 
@@ -625,14 +649,28 @@ class FoosballVersusEnv(gym.Env):
             toward_enemy = vx < -0.05
         return float(speed * 0.1) if toward_enemy else 0.0
 
-    def _get_rewards(self, event: Optional[str], contacts: Dict[str, bool]) -> Dict[str, float]:
+    def _get_rewards(
+        self, 
+        event: Optional[str], 
+        contacts: Dict[str, bool],
+        block_events: Dict[str, bool]
+    ) -> Dict[str, float]:
         home = 0.0
         away = 0.0
+        
+        # Compute dense rewards
         dense_home = self._dense_alignment_reward("home")
         dense_away = self._dense_alignment_reward("away")
-
         kick_home = self._kick_velocity_reward("home", contacts.get("home", False))
         kick_away = self._kick_velocity_reward("away", contacts.get("away", False))
+        
+        # Reset block reward eligibility when ball starts moving toward opponent's goal
+        # This allows a new block reward if the ball comes back
+        vx = float(self._est_vel[0])
+        if vx > 0.1:  # Ball moving toward away goal -> home can be rewarded again
+            self._block_rewarded["home"] = False
+        if vx < -0.1:  # Ball moving toward home goal -> away can be rewarded again
+            self._block_rewarded["away"] = False
 
         comps = {
             "home": {
@@ -640,33 +678,41 @@ class FoosballVersusEnv(gym.Env):
                 "kick_velocity": kick_home,
                 "is_goal": 1.0 if event == "away_goal" else 0.0,
                 "allowed_goal": 1.0 if event == "home_goal" else 0.0,
-                "is_blocking": 1.0 if event == "home_block" else 0.0,
+                "is_blocking": 1.0 if block_events.get("home", False) else 0.0,
             },
             "away": {
                 "dense_block": dense_away,
                 "kick_velocity": kick_away,
                 "is_goal": 1.0 if event == "home_goal" else 0.0,
                 "allowed_goal": 1.0 if event == "away_goal" else 0.0,
-                "is_blocking": 1.0 if event == "away_block" else 0.0,
+                "is_blocking": 1.0 if block_events.get("away", False) else 0.0,
             },
         }
 
-        # home = comps["home"]["dense_block"] + comps["home"]["kick_velocity"]
-        # away = comps["away"]["dense_block"] + comps["away"]["kick_velocity"]
+        # Apply dense rewards if enabled
+        if self.use_dense_rewards:
+            home += dense_home + kick_home
+            away += dense_away + kick_away
 
+        # Sparse terminal rewards
         if event == "home_goal":
             away += 10.0
             home -= 10.0
         elif event == "away_goal":
             home += 10.0
             away -= 10.0
-        elif event == "home_block":
+        
+        # Block rewards - only reward once per "attack" (until ball changes direction)
+        if block_events.get("home", False) and not self._block_rewarded["home"]:
             home += 0.5
             away -= 0.5
-        elif event == "away_block":
+            self._block_rewarded["home"] = True
+        if block_events.get("away", False) and not self._block_rewarded["away"]:
             away += 0.5
             home -= 0.5
-        elif event == "out":
+            self._block_rewarded["away"] = True
+            
+        if event == "out":
             home -= 1.0
             away -= 1.0
 
