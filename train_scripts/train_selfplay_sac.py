@@ -23,7 +23,7 @@ from ray.rllib.algorithms.sac import SACConfig
 from ray.rllib.core.rl_module.multi_rl_module import MultiRLModuleSpec
 from ray.rllib.core.rl_module.rl_module import RLModuleSpec, DefaultModelConfig
 
-from MultiAgentVersusEnv import FoosballSelfPlayEnv, FoosballSelfPlayEnvConfig
+from foosball_envs.MultiAgentVersusEnv import FoosballSelfPlayEnv, FoosballSelfPlayEnvConfig
 
 
 def env_creator(env_ctx):

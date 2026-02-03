@@ -25,7 +25,7 @@ import numpy as np
 import pybullet as p
 from stable_baselines3 import SAC
 
-from FoosballVersusEnv import FoosballVersusEnv
+from foosball_envs.FoosballVersusEnv import FoosballVersusEnv
 
 
 def _default_model_path(control_side: str) -> str | None:

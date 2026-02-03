@@ -20,7 +20,7 @@ from typing import Dict
 import numpy as np
 import pybullet as p
 
-from FoosballGoalieEnv import FoosballGoalieEnv
+from foosball_envs.FoosballGoalieEnv import FoosballGoalieEnv
 
 
 def parse_args() -> argparse.Namespace:

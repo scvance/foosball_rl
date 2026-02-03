@@ -16,7 +16,7 @@ import time
 import math
 import numpy as np
 
-from FoosballSimCore import _FoosballSimCore
+from foosball_envs.FoosballSimCore import _FoosballSimCore
 
 
 def clamp(x, lo, hi):

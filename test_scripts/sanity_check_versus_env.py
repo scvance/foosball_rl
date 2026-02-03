@@ -16,7 +16,7 @@ import numpy as np
 import time
 import pybullet as p
 
-from FoosballVersusEnv import FoosballVersusEnv
+from foosball_envs.FoosballVersusEnv import FoosballVersusEnv
 
 
 def print_header(title):

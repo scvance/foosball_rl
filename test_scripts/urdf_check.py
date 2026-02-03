@@ -14,7 +14,7 @@ import numpy as np
 import pybullet as p
 import time
 
-from FoosballSimCore import _FoosballSimCore
+from foosball_envs.FoosballSimCore import _FoosballSimCore
 
 
 def main():

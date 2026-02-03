@@ -24,7 +24,7 @@ import os
 # Add parent directory to path if needed
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from FoosballVersusEnv import FoosballVersusEnv
+from foosball_envs.FoosballVersusEnv import FoosballVersusEnv
 
 
 def format_obs(obs: dict, side: str) -> str:

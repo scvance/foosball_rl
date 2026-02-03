@@ -9,11 +9,8 @@ offset to apply in the code or URDF.
 import numpy as np
 import pybullet as p
 import time
-import sys
 
-sys.path.insert(0, '/mnt/user-data/uploads')
-
-from FoosballVersusEnv import FoosballVersusEnv
+from foosball_envs.FoosballVersusEnv import FoosballVersusEnv
 
 
 def interactive_find_zero(env):

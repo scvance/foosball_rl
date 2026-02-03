@@ -1,5 +1,5 @@
 from ray.rllib.env.multi_agent_env import MultiAgentEnv
-from FoosballVersusEnv import FoosballVersusEnv
+from foosball_envs.FoosballVersusEnv import FoosballVersusEnv
 from dataclasses import dataclass
 import numpy as np
 from gymnasium import spaces

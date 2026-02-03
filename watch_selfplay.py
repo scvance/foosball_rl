@@ -2,7 +2,7 @@ import argparse
 import numpy as np
 import ray
 from ray.rllib.algorithms.sac import SACConfig
-from FoosballVersusEnv import FoosballVersusEnv
+from foosball_envs.FoosballVersusEnv import FoosballVersusEnv
 
 def main():
     parser = argparse.ArgumentParser()

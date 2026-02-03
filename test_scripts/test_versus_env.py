@@ -14,7 +14,7 @@ This script tests the negation fix applied at the action level.
 import numpy as np
 import time
 
-from FoosballVersusEnv import FoosballVersusEnv
+from foosball_envs.FoosballVersusEnv import FoosballVersusEnv
 
 
 def test_continuous_rotation(env, duration=8.0):

@@ -21,7 +21,7 @@ from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv, VecMoni
 from stable_baselines3.common.callbacks import BaseCallback, CallbackList, CheckpointCallback, EvalCallback
 from stable_baselines3.common.utils import set_random_seed
 
-from FoosballGoalieEnv import FoosballGoalieEnv
+from foosball_envs.FoosballGoalieEnv import FoosballGoalieEnv
 
 
 class EventStatsCallback(BaseCallback):

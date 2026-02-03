@@ -47,8 +47,8 @@ class _FoosballSimCore:
         time_step: float,
         seed: Optional[int],
         base_pos=(0.0, 0.0, 0.10),
-        urdf_filename: str = "onshape_robot/foosball_robot/foosball_robot.urdf",
-        assets_dirname: str = "onshape_robot/foosball_robot/assets",
+        urdf_filename: str = "../onshape_robot/foosball_robot/foosball_robot.urdf",
+        assets_dirname: str = "../onshape_robot/foosball_robot/assets",
         table_mesh_filename: str = "main_body.stl",
         # physics
         num_substeps: int = 8,

@@ -31,7 +31,7 @@ from stable_baselines3.common.utils import set_random_seed
 
 from gymnasium import spaces
 
-from FoosballVersusEnv import FoosballVersusEnv
+from foosball_envs.FoosballVersusEnv import FoosballVersusEnv
 
 
 def _worker(remote, parent_remote, env_fn):

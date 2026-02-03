@@ -8,7 +8,7 @@ import numpy as np
 import gymnasium as gym
 from gymnasium import spaces
 
-from FoosballSimCore import _FoosballSimCore
+from foosball_envs.FoosballSimCore import _FoosballSimCore
 
 
 class FoosballGoalieEnv(gym.Env):

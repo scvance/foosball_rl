@@ -9,7 +9,7 @@ import numpy as np
 import pybullet as p
 import time
 
-from FoosballVersusEnv import FoosballVersusEnv
+from foosball_envs.FoosballVersusEnv import FoosballVersusEnv
 
 
 def diagnose_joint_type(env):
