@@ -1,186 +1,123 @@
-"""
-Minimal self-play training loop for two SAC agents on FoosballVersusEnv.
-
-This uses Stable-Baselines3 SAC models but drives rollouts manually so two
-policies can act simultaneously in the same environment.
-"""
-
-import argparse
+import logging
 import os
-from typing import Tuple
+from tqdm import tqdm
+os.environ["RAY_DEDUP_LOGS"] = "1"
+os.environ["RAY_LOG_TO_STDERR"] = "0"
+os.environ["PYTHONWARNINGS"] = "ignore::DeprecationWarning"
 
-import numpy as np
-import gymnasium as gym
-from stable_baselines3 import SAC
-from stable_baselines3.common.vec_env import DummyVecEnv
-from stable_baselines3.common.utils import set_random_seed
-from gymnasium import spaces
+# Suppress Ray's noisy warnings
+logging.getLogger("ray").setLevel(logging.ERROR)
+logging.getLogger("ray.rllib").setLevel(logging.ERROR)
+logging.getLogger("ray.tune").setLevel(logging.WARNING)
 
-try:
-    from tqdm import tqdm
-except ImportError:  # lightweight fallback if tqdm isn't installed
-    tqdm = None
+import warnings
+warnings.filterwarnings("ignore", category=DeprecationWarning)
+warnings.filterwarnings("ignore", category=FutureWarning)
 
-from FoosballVersusEnv import FoosballVersusEnv
+from argparse import ArgumentParser
+from dataclasses import asdict
 
+import ray
+from ray.tune.registry import register_env
+from ray.rllib.algorithms.sac import SACConfig
+from ray.rllib.core.rl_module.multi_rl_module import MultiRLModuleSpec
+from ray.rllib.core.rl_module.rl_module import RLModuleSpec, DefaultModelConfig
 
-class StaticSpaceEnv(gym.Env):
-    """
-    Minimal Gymnasium env to provide spaces for SB3 policy construction.
-    We never really step it, but implement step/reset to satisfy VecEnv.
-    """
-
-    metadata = {"render_modes": []}
-
-    def __init__(self, obs_space, act_space):
-        super().__init__()
-        self.observation_space = obs_space
-        self.action_space = act_space
-
-    def reset(self, *, seed=None, options=None):
-        super().reset(seed=seed)
-        return np.zeros(self.observation_space.shape, dtype=np.float32), {}
-
-    def step(self, action):
-        obs = np.zeros(self.observation_space.shape, dtype=np.float32)
-        reward = 0.0
-        terminated = True
-        truncated = True
-        info = {}
-        return obs, reward, terminated, truncated, info
+from MultiAgentVersusEnv import FoosballSelfPlayEnv, FoosballSelfPlayEnvConfig
 
 
-def build_model(name: str, obs_space, act_space, device: str, lr: float, tensorboard: str) -> SAC:
-    dummy_env = DummyVecEnv([lambda: StaticSpaceEnv(obs_space, act_space)])
-    model = SAC(
-        policy="MlpPolicy",
-        env=dummy_env,
-        learning_rate=lr,
-        batch_size=64,
-        device=device,
-        verbose=1,
-        tensorboard_log=tensorboard,
-        buffer_size=500_000,
-        learning_starts=0,  # handled in custom loop
-    )
-    model._custom_name = name  # for logging
-    return model
-
-
-def add_transition(model: SAC, obs, action, reward, next_obs, done: bool, truncated: bool):
-    info = {"TimeLimit.truncated": truncated}
-    obs_b = np.expand_dims(obs, axis=0)
-    next_obs_b = np.expand_dims(next_obs, axis=0)
-    action_b = np.expand_dims(action, axis=0)
-    reward_b = np.array([reward], dtype=np.float32)
-    done_b = np.array([done], dtype=bool)
-    model.replay_buffer.add(
-        obs=obs_b,
-        next_obs=next_obs_b,
-        action=action_b,
-        reward=reward_b,
-        done=done_b,
-        infos=[info],
-    )
+def env_creator(env_ctx):
+    # env_ctx is dict-like (EnvContext). Use it to build your config.
+    cfg = FoosballSelfPlayEnvConfig(**dict(env_ctx))
+    return FoosballSelfPlayEnv(config=cfg)
 
 
 def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--total_steps", type=int, default=2_000_000)
-    parser.add_argument("--learning_starts", type=int, default=5_000)
-    parser.add_argument("--train_freq", type=int, default=1_000)
-    parser.add_argument("--gradient_steps", type=int, default=1_000)
-    parser.add_argument("--batch_size", type=int, default=64)
-    parser.add_argument("--device", type=str, default="auto")
+    parser = ArgumentParser()
+    # ... your args exactly as you have them ...
+    parser.add_argument("--render-mode", type=str, default="none", choices=["none", "human", "rgb_array"])
+    parser.add_argument("--policy_hz", type=float, default=200.0)
+    parser.add_argument("--sim_hz", type=int, default=1000)
+    parser.add_argument("--max_episode_steps", type=int, default=1000)
     parser.add_argument("--seed", type=int, default=0)
-    parser.add_argument("--save_dir", type=str, default="selfplay_models")
-    parser.add_argument("--save_every", type=int, default=100_000)
-    parser.add_argument("--lr", type=float, default=3e-4)
-    parser.add_argument("--policy_hz", type=float, default=200.0, help="Policy update frequency (Hz).")
-    parser.add_argument("--sim_hz", type=int, default=1000, help="Simulation frequency (Hz).")
+    parser.add_argument("--num_substeps", type=int, default=8)
+    parser.add_argument("--speed_min", type=float, default=0.5)
+    parser.add_argument("--speed_max", type=float, default=15.0)
+    parser.add_argument("--bounce_prob", type=float, default=0.25)
+    parser.add_argument("--cam_noise_std", type=float, default=0.0)
+    parser.add_argument("--slider_vel_cap_mps", type=float, default=15.0)
+    parser.add_argument("--kicker_vel_cap_rads", type=float, default=170.0)
+    parser.add_argument("--real_time_gui", action="store_true")
+    parser.add_argument("--serve_side", type=str, default="home", choices=["home", "away", "random"])
     args = parser.parse_args()
 
-    set_random_seed(args.seed)
-    os.makedirs(args.save_dir, exist_ok=True)
-
-    # Env
-    env = FoosballVersusEnv(
-        render_mode="none",
-        serve_side="random",
-        seed=args.seed,
+    env_config_obj = FoosballSelfPlayEnvConfig(
+        render_mode=args.render_mode,
         policy_hz=args.policy_hz,
         sim_hz=args.sim_hz,
-        max_episode_steps=3000,
+        max_episode_steps=args.max_episode_steps,
+        seed=args.seed,
+        num_substeps=args.num_substeps,
+        speed_min=args.speed_min,
+        speed_max=args.speed_max,
+        bounce_prob=args.bounce_prob,
+        cam_noise_std=args.cam_noise_std,
+        slider_vel_cap_mps=args.slider_vel_cap_mps,
+        kicker_vel_cap_rads=args.kicker_vel_cap_rads,
+        real_time_gui=args.real_time_gui,
+        serve_side=args.serve_side,
     )
-    obs_space = env.observation_space["home"]
-    act_space = env.action_space["home"]
 
-    # Models
-    model_home = build_model("home", obs_space, act_space, args.device, args.lr, tensorboard=args.save_dir)
-    model_away = build_model("away", obs_space, act_space, args.device, args.lr, tensorboard=args.save_dir)
+    # Convert dataclass -> dict for Ray/RLlib
+    env_config = asdict(env_config_obj)
 
-    # Initialize loggers to avoid missing _logger when calling train()
-    model_home._setup_learn(total_timesteps=args.total_steps)
-    model_away._setup_learn(total_timesteps=args.total_steps)
+    ray.init(ignore_reinit_error=True, configure_logging=False)
+    register_env("FoosballSelfPlay", env_creator)
 
-    obs_dict, _ = env.reset()
-    ep = 0
-    ep_rewards_home = 0.0
-    ep_rewards_away = 0.0
-    ep_steps = 0
-    bar = tqdm(total=args.total_steps, dynamic_ncols=True) if tqdm is not None else None
+    rl_config = (
+        SACConfig()
+        .api_stack(
+            enable_rl_module_and_learner=False,
+            enable_env_runner_and_connector_v2=False,
+        )
+        .environment(env="FoosballSelfPlay", env_config=env_config, disable_env_checking=True)
+        .env_runners(num_env_runners=1, num_envs_per_env_runner=8)
+        .training(
+            gamma=0.9,
+            actor_lr=1e-3,
+            critic_lr=2e-3,
+            train_batch_size_per_learner=1024,
+            num_steps_sampled_before_learning_starts=10000,
+            replay_buffer_config={
+                "type": "MultiAgentPrioritizedReplayBuffer",
+                "capacity": 100_000,
+            },
+        )
+        .multi_agent(
+            policies={"shared_policy"},
+            policy_mapping_fn=lambda agent_id, *a, **k: "shared_policy",
+        )
+        .rl_module(
+            rl_module_spec=MultiRLModuleSpec(
+                rl_module_specs={
+                    "shared_policy": RLModuleSpec(),
+                }
+            ),
+        )
+    )
 
-    for step in range(1, args.total_steps + 1):
-        action_home, _ = model_home.predict(obs_dict["home"], deterministic=False)
-        action_away, _ = model_away.predict(obs_dict["away"], deterministic=False)
-
-        next_obs, rewards, terminated, truncated, info = env.step({"home": action_home, "away": action_away})
-        done = bool(terminated or truncated)
-
-        ep_rewards_home += float(rewards["home"])
-        ep_rewards_away += float(rewards["away"])
-        ep_steps += 1
-
-        add_transition(model_home, obs_dict["home"], action_home, rewards["home"], next_obs["home"], done, bool(truncated))
-        add_transition(model_away, obs_dict["away"], action_away, rewards["away"], next_obs["away"], done, bool(truncated))
-
-        obs_dict = next_obs
-        if done:
-            ep += 1
-            comps = info.get("reward_components")
-            dense_home = comps["home"]["dense_block"] if comps else 0.0
-            dense_away = comps["away"]["dense_block"] if comps else 0.0
-            msg = (
-                f"ep {ep:05d} steps={ep_steps:4d} event={info.get('event')} "
-                f"R_home={ep_rewards_home:+.3f} R_away={ep_rewards_away:+.3f} "
-                f"dense_home={dense_home:.3f} dense_away={dense_away:.3f}"
+    algo = rl_config.build()
+    for i in tqdm(range(100)):
+        result = algo.train()
+        if i % 10 == 0:
+            print(
+                f"Iter {i:4d} | "
+                f"ep_return_mean: {result['env_runners']['episode_return_mean']:.2f} | "
+                f"ep_len_mean: {result['env_runners']['episode_len_mean']:.1f} | "
+                # f"episodes: {result['env_runners']['num_episodes_lifetime']}"
             )
-            if bar is not None:
-                bar.set_description(msg)
-            else:
-                print(msg)
-            ep_rewards_home = 0.0
-            ep_rewards_away = 0.0
-            ep_steps = 0
-            obs_dict, _ = env.reset()
 
-        if step > args.learning_starts and (step % args.train_freq == 0):
-            model_home.train(args.gradient_steps, args.batch_size)
-            model_away.train(args.gradient_steps, args.batch_size)
-
-        if step % args.save_every == 0 or step == args.total_steps:
-            home_path = os.path.join(args.save_dir, f"home_step{step}.zip")
-            away_path = os.path.join(args.save_dir, f"away_step{step}.zip")
-            model_home.save(home_path)
-            model_away.save(away_path)
-            print(f"[save] step {step} saved {home_path} and {away_path}")
-
-        if bar is not None:
-            bar.update(1)
-
-    if bar is not None:
-        bar.close()
-    env.close()
+    algo.save("./checkpoints")
 
 
 if __name__ == "__main__":

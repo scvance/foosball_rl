@@ -87,9 +87,9 @@ class FoosballGoalieEnv(gym.Env):
 
         self.real_time_gui = bool(real_time_gui)
 
-        # Action now includes pos+vel for slider+kicker
+        # Action now includes pos+vel for slider and vel for kicker
         # [-1,1]^4
-        self.action_space = spaces.Box(low=-1.0, high=1.0, shape=(4,), dtype=np.float32)
+        self.action_space = spaces.Box(low=-1.0, high=1.0, shape=(3,), dtype=np.float32)
 
         # obs: 15 dims (est pos/vel/pred_pos + joints + intercept features)
         self.observation_space = spaces.Box(low=-np.inf, high=np.inf, shape=(15,), dtype=np.float32)
@@ -139,7 +139,7 @@ class FoosballGoalieEnv(gym.Env):
         self.sim.remove_ball()
         self.sim.reset_robot_randomized()
 
-        shot_info = self.sim.spawn_shot_random(self.speed_min, self.speed_max, self.bounce_prob)
+        shot_info = self.sim.spawn_shot_random(self.speed_min, self.speed_max, self.bounce_prob, target="home")
 
         self._update_estimator(first=True)
         self.sim.set_estimated_ball_state(self._est_pos, self._est_vel)
@@ -151,8 +151,6 @@ class FoosballGoalieEnv(gym.Env):
 
     def step(self, action):
         a = np.asarray(action, dtype=np.float32).reshape(-1)
-        if a.shape != (4,):
-            raise ValueError(f"Action must have shape (4,), got {a.shape}")
 
         self._episode_step += 1
 
@@ -160,29 +158,23 @@ class FoosballGoalieEnv(gym.Env):
         a_sp = float(np.clip(a[0], -1.0, 1.0))  # slider position command
         a_sv = float(np.clip(a[1], -1.0, 1.0))  # slider velocity command
         a_kp = float(np.clip(a[2], -1.0, 1.0))  # kicker position command
-        a_kv = float(np.clip(a[3], -1.0, 1.0))  # kicker velocity command
 
         # map positions [-1,1] -> joint limits
         slider_target = (
             self.sim.slider_limits.lower
             + (a_sp + 1.0) * 0.5 * (self.sim.slider_limits.upper - self.sim.slider_limits.lower)
         )
-        kicker_target = (
-            self.sim.kicker_limits.lower
-            + (a_kp + 1.0) * 0.5 * (self.sim.kicker_limits.upper - self.sim.kicker_limits.lower)
-        )
+        kicker_velocity = a_kp * self.sim.kicker_vel_cap
 
         # map velocity commands [-1,1] -> [0, cap]
         # (If you prefer signed velocity intent, we can change this, but POSITION_CONTROL uses maxVelocity as a cap.)
         slider_vel_cap = (a_sv + 1.0) * 0.5 * self.slider_vel_cap_mps
-        kicker_vel_cap = (a_kv + 1.0) * 0.5 * self.kicker_vel_cap_rads
 
         # apply once per policy step, then substep sim
         self.sim.apply_action_targets(
             slider_target,
-            kicker_target,
+            kicker_velocity,
             slider_vel_cap=float(slider_vel_cap),
-            kicker_vel_cap=float(kicker_vel_cap),
         )
 
         terminated = False

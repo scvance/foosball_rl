@@ -61,7 +61,7 @@ def main():
     parser.add_argument("--speed_min", type=float, default=8.0)
     parser.add_argument("--speed_max", type=float, default=15.0)
     parser.add_argument("--bounce_prob", type=float, default=0.25)
-    parser.add_argument("--policy_hz", type=float, default=20.0)
+    parser.add_argument("--policy_hz", type=float, default=200.0)
     parser.add_argument("--sim_hz", type=int, default=1000)
     parser.add_argument("--num_substeps", type=int, default=8)
     parser.add_argument("--max_episode_steps", type=int, default=1500)

@@ -132,11 +132,11 @@ def main():
 
     # Env params (shots)
     parser.add_argument("--speed_min", type=float, default=2.0)
-    parser.add_argument("--speed_max", type=float, default=10.0)
+    parser.add_argument("--speed_max", type=float, default=15.0)
     parser.add_argument("--bounce_prob", type=float, default=0.25)
 
     # NEW: control rates
-    parser.add_argument("--policy_hz", type=float, default=20.0, help="Policy update frequency (Hz).")
+    parser.add_argument("--policy_hz", type=float, default=200.0, help="Policy update frequency (Hz).")
     parser.add_argument("--sim_hz", type=int, default=1000, help="Simulation frequency (Hz). Try 2000.")
 
     # NEW: action caps (what policy can ask for)

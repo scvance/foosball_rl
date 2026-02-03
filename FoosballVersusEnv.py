@@ -13,10 +13,19 @@ from FoosballSimCore import _FoosballSimCore
 
 class FoosballVersusEnv(gym.Env):
     """
-    Two-goalie self-play environment.
-    - Action: Dict with {"home": [slider, kicker], "away": [slider, kicker]} in [-1, 1]
-    - Observation per side: ball est pos/vel/pred (9) + own joints (4) + opp joints (4) + intercept (4) => 21 dims
-    - Reward: basic zero-sum placeholder (you can swap in your own later).
+    Two-goalie self-play environment with velocity-controlled kickers.
+    
+    Action per side: [slider_pos, slider_vel, kicker_vel] in [-1, 1]
+      - slider_pos: maps to slider joint position limits
+      - slider_vel: maps to [0, slider_vel_cap] (speed for position control)
+      - kicker_vel: maps to [-kicker_vel_cap, +kicker_vel_cap] (angular velocity)
+    
+    Observation per side: ball est pos/vel/pred (9) + own joints (4) + opp joints (4) + intercept (4) => 21 dims
+    
+    MIRRORING FOR SINGLE-POLICY TRAINING:
+    - Observations for 'away' are mirrored so both sides see the game from the same perspective
+    - Actions for 'away' are mirrored: slider_pos and kicker_vel are negated
+    - This allows training a single policy that can play both sides via self-play
     """
 
     metadata = {"render_modes": ["human", "none"], "render_fps": 60}
@@ -26,7 +35,7 @@ class FoosballVersusEnv(gym.Env):
         render_mode: str = "none",
         # control rates
         policy_hz: float = 20.0,
-        sim_hz: int = 1000,  # set to 2000 if desired
+        sim_hz: int = 1000,
         max_episode_steps: int = 100,
         seed: Optional[int] = None,
         num_substeps: int = 8,
@@ -42,8 +51,6 @@ class FoosballVersusEnv(gym.Env):
         # GUI pacing
         real_time_gui: bool = True,
         serve_side: str = "random",  # 'home' | 'away' | 'random'
-        # reward shaping
-        use_dense_rewards: bool = True,
     ):
         super().__init__()
 
@@ -51,7 +58,6 @@ class FoosballVersusEnv(gym.Env):
             raise ValueError("render_mode must be 'human' or 'none'")
         
         self.serve_side = serve_side
-
         self.render_mode = render_mode
 
         self.policy_hz = float(policy_hz)
@@ -83,21 +89,19 @@ class FoosballVersusEnv(gym.Env):
         self.kicker_vel_cap_rads = float(kicker_vel_cap_rads)
 
         self.real_time_gui = bool(real_time_gui)
-        
-        self.use_dense_rewards = bool(use_dense_rewards)
 
-        # Action now includes pos+vel for slider+kicker
-        # [-1,1]^4
-        act_box = spaces.Box(low=-1.0, high=1.0, shape=(4,), dtype=np.float32)
+        # Action: [slider_pos, slider_vel, kicker_vel] in [-1, 1]
+        act_box = spaces.Box(low=-1.0, high=1.0, shape=(3,), dtype=np.float32)
         self.action_space = spaces.Dict({"home": act_box, "away": act_box})
-        # obs: 21 dims (est pos/vel/pred_pos + own joints + opp joints + intercept features)
+        
+        # Observation: 21 dims (est pos/vel/pred_pos + own joints + opp joints + intercept features)
         obs_box = spaces.Box(low=-np.inf, high=np.inf, shape=(21,), dtype=np.float32)
         self.observation_space = spaces.Dict({"home": obs_box, "away": obs_box})
 
         # sim core
         self.sim = _FoosballSimCore(
             use_gui=(render_mode == "human"),
-            time_step=self.dt_sim,   # <-- sim runs at 1000/2000 Hz
+            time_step=self.dt_sim,
             seed=seed,
             ball_restitution=0.8,
             table_restitution=0.5,
@@ -111,30 +115,56 @@ class FoosballVersusEnv(gym.Env):
         self._est_vel = np.zeros(3, dtype=np.float32)
         self._pred_pos = np.zeros(3, dtype=np.float32)
         self._vel_win = deque(maxlen=3)
-        self._pos_hist = []  # list of (t, pos) for smoothing
+        self._pos_hist = []
 
         # episode bookkeeping
         self._episode_step = 0
         self._terminated_event: Optional[str] = None
-        self._goal_count = 0
-        self._block_count = 0
-        self._out_count = 0
-        self._intercept_available = False
-        
-        # Track whether we've already rewarded a block this "attack"
-        # Reset when ball starts moving toward the goal again
-        self._block_rewarded = {"home": False, "away": False}
 
         # HUD
         if self.render_mode == "human":
             self.sim.set_goal_intercept_debug(None, None, None, None)
 
-        # Ensure opponent joints exist (URDF must define opponent_slider/opponent_kicker).
+        # Ensure opponent joints exist
         if self.sim.opponent_slider_idx is None or self.sim.opponent_kicker_idx is None:
             raise RuntimeError(
                 "FoosballVersusEnv expects URDF joints 'opponent_slider' and 'opponent_kicker'. "
                 "Update the URDF before using this env."
             )
+        
+        # Cache table center for mirroring calculations
+        self._table_center_x = float(
+            (self.sim.table_min_local[0] + self.sim.table_max_local[0]) / 2.0
+        )
+        self._table_center_y = float(
+            (self.sim.table_min_local[1] + self.sim.table_max_local[1]) / 2.0
+        )
+
+    # ----------------------------
+    # Mirroring helpers for symmetric observations
+    # ----------------------------
+    
+    def _mirror_x(self, x: float) -> float:
+        """Mirror an x-coordinate about the table center."""
+        return 2.0 * self._table_center_x - x
+    
+    def _mirror_y(self, y: float) -> float:
+        """Mirror a y-coordinate about the table center."""
+        return 2.0 * self._table_center_y - y
+    
+    def _mirror_position(self, pos: np.ndarray) -> np.ndarray:
+        """Mirror a 3D position (flip x and y axes about table center)."""
+        mirrored = pos.copy().astype(np.float32)
+        mirrored[0] = self._mirror_x(float(pos[0]))
+        mirrored[1] = self._mirror_y(float(pos[1]))
+        return mirrored
+    
+    def _mirror_velocity(self, vel: np.ndarray) -> np.ndarray:
+        """Mirror a 3D velocity (negate x and y components)."""
+        mirrored = vel.copy().astype(np.float32)
+        mirrored[0] = -mirrored[0]
+        mirrored[1] = -mirrored[1]
+        return mirrored
 
     # ----------------------------
     # Gymnasium API
@@ -145,9 +175,6 @@ class FoosballVersusEnv(gym.Env):
 
         self._episode_step = 0
         self._terminated_event = None
-        
-        # Reset block reward tracking for new episode
-        self._block_rewarded = {"home": False, "away": False}
 
         # reset sim
         self.sim.remove_ball()
@@ -170,44 +197,47 @@ class FoosballVersusEnv(gym.Env):
     def step(self, action: Dict[str, np.ndarray]):
         a_home = np.asarray(action["home"], dtype=np.float32).reshape(-1)
         a_away = np.asarray(action["away"], dtype=np.float32).reshape(-1)
-        if a_home.shape != (4,) or a_away.shape != (4,):
-            raise ValueError(f"Actions must have shape (4,) each, got {a_home.shape} and {a_away.shape}")
 
         self._episode_step += 1
 
-        # map action [-1,1] to joint ranges (positions) and velocity caps
-        h_sp = float(np.clip(a_home[0], -1.0, 1.0))
-        h_sv = float(np.clip(a_home[1], -1.0, 1.0))
-        h_kp = float(np.clip(a_home[2], -1.0, 1.0))
-        h_kv = float(np.clip(a_home[3], -1.0, 1.0))
+        # === HOME ACTION PROCESSING ===
+        # Action: [slider_pos, slider_vel, kicker_vel]
+        h_slider_pos = float(np.clip(a_home[0], -1.0, 1.0))
+        h_slider_vel = float(np.clip(a_home[1], -1.0, 1.0))
+        h_kicker_vel = float(np.clip(a_home[2], -1.0, 1.0))
 
-        home_slider_target = self._interp_action(h_sp, self.sim.slider_limits)
-        home_kicker_target = self._interp_action(h_kp, self.sim.kicker_limits)
-        home_slider_vel = (h_sv + 1.0) * 0.5 * self.slider_vel_cap_mps
-        home_kicker_vel = (h_kv + 1.0) * 0.5 * self.kicker_vel_cap_rads
+        # Map slider position [-1,1] -> joint limits
+        home_slider_target = self._interp_to_limits(h_slider_pos, self.sim.slider_limits)
+        # Map slider velocity [-1,1] -> [0, cap] (speed for position control)
+        home_slider_vel_cap = (h_slider_vel + 1.0) * 0.5 * self.slider_vel_cap_mps
+        # Map kicker velocity [-1,1] -> [-cap, +cap] (angular velocity)
+        home_kicker_velocity = h_kicker_vel * self.kicker_vel_cap_rads
 
-        opp_slider_limits = self.sim.opponent_slider_limits
-        opp_kicker_limits = self.sim.opponent_kicker_limits
+        # === AWAY ACTION PROCESSING (MIRRORED) ===
+        # The policy outputs actions as if it were playing home side
+        # We need to mirror them for the away side
+        a_slider_pos = float(np.clip(a_away[0], -1.0, 1.0))
+        a_slider_vel = float(np.clip(a_away[1], -1.0, 1.0))
+        a_kicker_vel = float(np.clip(a_away[2], -1.0, 1.0))
 
-        a_sp = float(np.clip(a_away[0], -1.0, 1.0))
-        a_sv = float(np.clip(a_away[1], -1.0, 1.0))
-        a_kp = float(np.clip(a_away[2], -1.0, 1.0))
-        a_kv = float(np.clip(a_away[3], -1.0, 1.0))
+        # MIRROR: Negate slider position (left/right is flipped)
+        a_slider_pos_mirrored = -a_slider_pos
+        # MIRROR: Negate kicker velocity (spin direction is flipped)
+        a_kicker_vel_mirrored = -a_kicker_vel
 
-        away_slider_target = self._interp_action(a_sp, opp_slider_limits)
-        away_kicker_target = self._interp_action(a_kp, opp_kicker_limits)
-        away_slider_vel = (a_sv + 1.0) * 0.5 * self.slider_vel_cap_mps
-        away_kicker_vel = (a_kv + 1.0) * 0.5 * self.kicker_vel_cap_rads
+        # Map mirrored actions to physical commands
+        away_slider_target = self._interp_to_limits(a_slider_pos_mirrored, self.sim.opponent_slider_limits)
+        away_slider_vel_cap = (a_slider_vel + 1.0) * 0.5 * self.slider_vel_cap_mps  # Speed doesn't need mirroring
+        away_kicker_velocity = a_kicker_vel_mirrored * self.kicker_vel_cap_rads
 
+        # Apply actions to simulation
         self.sim.apply_action_targets_dual(
             home_slider_target,
-            home_kicker_target,
+            home_kicker_velocity,
             away_slider_target,
-            away_kicker_target,
-            home_slider_vel_cap=home_slider_vel,
-            home_kicker_vel_cap=home_kicker_vel,
-            away_slider_vel_cap=away_slider_vel,
-            away_kicker_vel_cap=away_kicker_vel,
+            away_kicker_velocity,
+            home_slider_vel_cap=home_slider_vel_cap,
+            away_slider_vel_cap=away_slider_vel_cap,
         )
 
         terminated = False
@@ -216,23 +246,27 @@ class FoosballVersusEnv(gym.Env):
         out_reason = ""
         block_events = {"home": False, "away": False}
 
-        last_contacts = {"home": False, "away": False}
         for _ in range(self.steps_per_policy):
             self.sim.step_sim(1)
-            y_pred, z_pred, x_goal, t_goal = self._predict_goal_intercept_est("away") or (0.0, 0.0, 0.0, 0.0)
-            self.sim.set_goal_intercept_debug(y_pred, z_pred, x_goal, v_dir=(1.0, 0.0, 0.0))
+            
+            # Update debug visualization
+            intercept = self._predict_goal_intercept_est("home")
+            if intercept:
+                y_pred, z_pred, x_goal, t_goal = intercept
+                self.sim.set_goal_intercept_debug(y_pred, z_pred, x_goal, v_dir=(-1.0, 0.0, 0.0))
+            else:
+                self.sim.set_goal_intercept_debug(None, None, None, None)
 
-            # Update estimator every sim step using per-step dt for smoother debug markers
+            # Update estimator every sim step
             self._update_estimator(first=False, dt_scale=1.0)
             self.sim.set_estimated_ball_state(self._est_pos, self._est_vel)
 
-            if self.render_mode == "human":
-                time.sleep(self.dt_sim / 2) if self.real_time_gui else 0.0
+            if self.render_mode == "human" and self.real_time_gui:
+                time.sleep(self.dt_sim / 2)
 
+            # Check terminal conditions
             goals = self.sim.check_goal_crossings_dual()
             blocks = self.sim.check_block_events_dual()
-            last_contacts["home"] = last_contacts["home"] or self.sim.had_contact_with_kicker(self.sim.kicker_idx)
-            last_contacts["away"] = last_contacts["away"] or self.sim.had_contact_with_kicker(self.sim.opponent_kicker_idx)
             out, reason = self.sim.check_ball_out_of_bounds()
 
             if goals.get("home", False):
@@ -243,11 +277,16 @@ class FoosballVersusEnv(gym.Env):
                 terminated = True
                 event = "away_goal"
                 break
-            # Track both block events (not just the last one)
             if blocks.get("home", False):
                 block_events["home"] = True
+                terminated = True
+                event = "home_block"
+                break
             if blocks.get("away", False):
                 block_events["away"] = True
+                terminated = True
+                event = "away_block"
+                break
             if out:
                 truncated = True
                 event = "out"
@@ -258,18 +297,8 @@ class FoosballVersusEnv(gym.Env):
                 event = "stalled"
                 break
 
-        # If no terminal event, report block events (prioritize based on who blocked)
-        if event is None:
-            if block_events["home"] and block_events["away"]:
-                # Both blocked - could happen in rapid exchange; report both via info
-                event = "both_block"
-            elif block_events["home"]:
-                event = "home_block"
-            elif block_events["away"]:
-                event = "away_block"
-
         self._terminated_event = event
-        rewards = self._get_rewards(event, last_contacts, block_events)
+        rewards = self._get_rewards(event, block_events)
 
         if self._episode_step >= self.max_episode_steps:
             truncated = True
@@ -288,12 +317,10 @@ class FoosballVersusEnv(gym.Env):
 
     def _detect_stalled_ball(self) -> bool:
         ball_pos, ball_vel = self.sim.get_ball_true_local_pos_vel()
-        # ensure the ball is at least 5 cm away from the goalie xs
         goalie_x = self.sim.goalie_x
         goalie_x_away = self.sim.goalie_x_away
         min_dist_from_goalie = 0.05 + self.sim.ball_radius
         dist_from_goalie = min(abs(float(ball_pos[0]) - goalie_x), abs(float(ball_pos[0]) - goalie_x_away))
-        # Increased threshold from 0.02 to 0.05 to avoid premature stall detection
         return dist_from_goalie < min_dist_from_goalie and float(np.linalg.norm(ball_vel)) < 0.05
 
     def _sample_noisy_ball_pos_local(self) -> np.ndarray:
@@ -311,7 +338,6 @@ class FoosballVersusEnv(gym.Env):
     def _update_estimator(self, first: bool, dt_scale: Optional[float] = None):
         pos = self._sample_noisy_ball_pos_local()
 
-        # dt_eff for this estimator update
         if dt_scale is None:
             dt_eff = float(self.dt_eff)
         else:
@@ -328,13 +354,12 @@ class FoosballVersusEnv(gym.Env):
 
         t_prev = self._vel_win[-1][0] if len(self._vel_win) > 0 else 0.0
         t_new = t_prev + dt_eff
-        noise_tol = float(max(self.cam_noise_std)) * 3.0  # a few mm by default
-        speed_tol = 0.8  # m/s threshold to treat deviations as meaningful
+        noise_tol = float(max(self.cam_noise_std)) * 3.0
+        speed_tol = 0.8
 
-        # Direction change or significant deviation -> drop past measurements.
-        # Allow resets only after some travel/speed to ignore slow jitter.
-        min_travel_for_deviation = 0.025  # meters
-        min_travel_for_reset = 0.045      # meters
+        min_travel_for_deviation = 0.025
+        min_travel_for_reset = 0.045
+        
         if len(self._pos_hist) > 0:
             base_pos = self._pos_hist[0][1]
             last_pos = self._pos_hist[-1][1]
@@ -343,7 +368,7 @@ class FoosballVersusEnv(gym.Env):
             main_len = float(np.linalg.norm(main_vec))
             step_len = float(np.linalg.norm(step_vec))
 
-            # Detect a wall bounce from the latest segment alone (robust against long history).
+            # Wall bounce detection
             y_min_wall = float(self.sim.table_min_local[1] + self.sim.ball_radius + 0.001)
             y_max_wall = float(self.sim.table_max_local[1] - self.sim.ball_radius - 0.001)
             y0 = float(last_pos[1])
@@ -352,12 +377,10 @@ class FoosballVersusEnv(gym.Env):
             if (y0 < y_min_wall and y1 >= y_min_wall) or (y0 > y_min_wall and y1 <= y_min_wall):
                 bounce_wall_y = y_min_wall
             if (y0 < y_max_wall and y1 >= y_max_wall) or (y0 > y_max_wall and y1 <= y_max_wall):
-                # If both bounds are crossed (numerical glitch), prefer the first hit along the segment.
                 if bounce_wall_y is None:
                     bounce_wall_y = y_max_wall
 
             if bounce_wall_y is not None and abs(float(step_vec[1])) > 1e-6:
-                # Rebase history at the rebound point so the line fit uses only the post-bounce path.
                 t_hit = float((bounce_wall_y - y0) / float(step_vec[1]))
                 t_hit = max(0.0, min(1.0, t_hit))
                 bounce_pos = last_pos + step_vec * t_hit
@@ -373,7 +396,7 @@ class FoosballVersusEnv(gym.Env):
                 self.sim.set_estimated_ball_state(self._est_pos, self._est_vel)
                 return
 
-            # Explicit wall-bounce detection on X/Y (ignore Z since we stay on the surface).
+            # Explicit wall-bounce detection
             if len(self._pos_hist) >= 2:
                 prev_pos = self._pos_hist[-2][1]
                 dx_prev = float(last_pos[0] - prev_pos[0])
@@ -393,13 +416,6 @@ class FoosballVersusEnv(gym.Env):
                 bounced_y = near_y_wall and (dy_prev * dy_now < -1e-6) and abs(dy_prev) > 1e-4 and abs(dy_now) > 1e-4
 
                 if bounced_x or bounced_y:
-                    axis = "x" if bounced_x else "y"
-                    # print(
-                    #     f"[Estimator] reset: wall bounce on {axis}, "
-                    #     f"dx_prev={dx_prev:.4f}, dx_now={dx_now:.4f}, "
-                    #     f"dy_prev={dy_prev:.4f}, dy_now={dy_now:.4f}, "
-                    #     f"pos=({last_pos[0]:.4f},{last_pos[1]:.4f})"
-                    # )
                     self._vel_win.clear()
                     self._pos_hist = [(0.0, pos.copy())]
                     self._est_pos = pos.copy()
@@ -416,25 +432,17 @@ class FoosballVersusEnv(gym.Env):
             dev = 0.0
             travel = float(np.linalg.norm(last_pos - base_pos))
             if travel >= min_travel_for_deviation and main_len > 1e-6:
-                # Distance of new point to line defined by (base_pos, last_pos).
                 rel = pos - base_pos
                 proj = float(np.dot(rel, main_vec)) / (main_len * main_len)
                 closest = base_pos + proj * main_vec
                 dev = float(np.linalg.norm(pos - closest))
-                # Require deviation well outside noise band to avoid over-reset.
                 line_deviation = dev > max(noise_tol * 2.0, noise_tol + 0.003)
 
             hist_dt = t_new - self._pos_hist[0][0]
             avg_speed = travel / max(hist_dt, 1e-6)
-            step_speed = step_len / max(dt_eff, 1e-6)
             allow_reset = (avg_speed >= speed_tol and travel >= min_travel_for_reset)
 
             if allow_reset and len(self._pos_hist) >= 3 and (dir_flip or line_deviation):
-                # print(
-                #     f"[Estimator] reset: dir_flip={dir_flip}, line_dev={line_deviation}, "
-                #     f"step_speed={step_speed:.3f} m/s, avg_speed={avg_speed:.3f} m/s, "
-                #     f"travel={travel:.3f} m, dev={dev:.4f}, dev_tol={noise_tol:.4f}"
-                # )
                 self._vel_win.clear()
                 self._pos_hist = [(0.0, pos.copy())]
                 self._est_pos = pos.copy()
@@ -460,7 +468,6 @@ class FoosballVersusEnv(gym.Env):
             if denom > 1e-9:
                 vel = (p1 - p0) / denom
 
-        # Estimate position/velocity with a single linear fit and evaluate it at the latest timestamp.
         if len(self._pos_hist) >= 2:
             times = np.array([t for t, _ in self._pos_hist], dtype=np.float32)
             coords = np.stack([p for _, p in self._pos_hist], axis=0)
@@ -481,50 +488,89 @@ class FoosballVersusEnv(gym.Env):
             self._est_vel = vel.astype(np.float32)
             self._est_pos = pos.copy()
 
-        # predict one policy-step ahead (not one sim step)
         self._pred_pos = (self._est_pos + self._est_vel * float(self.dt_eff)).astype(np.float32)
 
+    def _wrap_to_pi(self, angle: float) -> float:
+        """Wrap angle in radians to [-pi, pi]."""
+        return ((angle + math.pi) % (2.0 * math.pi)) - math.pi
+
     def _get_obs_for_side(self, side: str) -> np.ndarray:
+        """
+        Get observation for a given side.
+        
+        For 'away', observations are mirrored so that the policy sees the game
+        from the same perspective as 'home'. This allows training a single policy
+        that can play both sides.
+        """
         (slider_home, kicker_home), (v_slider_home, v_kicker_home) = self.sim.get_joint_positions_and_vels()
         (slider_away, kicker_away), (v_slider_away, v_kicker_away) = self.sim.get_opponent_joint_positions_and_vels()
 
         if side == "home":
-            own_joints = np.array([kicker_home, slider_home, v_kicker_home, v_slider_home], dtype=np.float32)
+            own_joints = np.array([self._wrap_to_pi(kicker_home), slider_home, v_kicker_home, v_slider_home], dtype=np.float32)
             opp_joints = np.array(
                 [
-                    kicker_away if kicker_away is not None else 0.0,
+                    self._wrap_to_pi(kicker_away) if kicker_away is not None else 0.0,
                     slider_away if slider_away is not None else 0.0,
                     v_kicker_away if v_kicker_away is not None else 0.0,
                     v_slider_away if v_slider_away is not None else 0.0,
                 ],
                 dtype=np.float32,
             )
-        else:
+            
+            est_pos = self._est_pos.astype(np.float32)
+            est_vel = self._est_vel.astype(np.float32)
+            pred_pos = self._pred_pos.astype(np.float32)
+            
+            y_pred, z_pred, x_goal, t_goal = self._predict_goal_intercept_est(side) or (0.0, 0.0, 0.0, 0.0)
+            
+        else:  # away
+            # Away sees itself as "own" and home as "opponent"
+            # Also mirror the joint velocities for kicker (rotation direction)
             own_joints = np.array(
                 [
-                    kicker_away if kicker_away is not None else 0.0,
-                    slider_away if slider_away is not None else 0.0,
-                    v_kicker_away if v_kicker_away is not None else 0.0,
-                    v_slider_away if v_slider_away is not None else 0.0,
+                    self._wrap_to_pi(- kicker_away) if kicker_away is not None else 0.0,
+                    - slider_away if slider_away is not None else 0.0,
+                    - (v_kicker_away if v_kicker_away is not None else 0.0),  # Negate kicker vel
+                    - v_slider_away if v_slider_away is not None else 0.0,
                 ],
                 dtype=np.float32,
             )
-            opp_joints = np.array([kicker_home, slider_home, v_kicker_home, v_slider_home], dtype=np.float32)
-
-        y_pred, z_pred, x_goal, t_goal = self._predict_goal_intercept_est(side) or (0.0, 0.0, 0.0, 0.0)
+            opp_joints = np.array(
+                [
+                    self._wrap_to_pi(- kicker_home),
+                    - slider_home,
+                    - v_kicker_home,
+                    - v_slider_home
+                ],
+                dtype=np.float32,
+            )
+            
+            # Mirror ball state for away side
+            est_pos = self._mirror_position(self._est_pos)
+            est_vel = self._mirror_velocity(self._est_vel)
+            pred_pos = self._mirror_position(self._pred_pos)
+            
+            # Get intercept prediction and mirror it
+            intercept = self._predict_goal_intercept_est(side)
+            if intercept is not None:
+                y_pred, z_pred, x_goal, t_goal = intercept
+                x_goal = self._mirror_x(x_goal)
+                y_pred = self._mirror_y(y_pred)
+            else:
+                y_pred, z_pred, x_goal, t_goal = 0.0, 0.0, 0.0, 0.0
 
         obs = np.concatenate(
             [
-                self._est_pos.astype(np.float32),  # 3
-                self._est_vel.astype(np.float32),  # 3
-                self._pred_pos.astype(np.float32),  # 3
+                est_pos,  # 3
+                est_vel,  # 3
+                pred_pos,  # 3
                 own_joints,  # 4
                 opp_joints,  # 4
-                np.array([y_pred, z_pred, x_goal, t_goal], dtype=np.float32)
+                np.array([y_pred, z_pred, x_goal, t_goal], dtype=np.float32)  # 4
             ],
             axis=0,
         )
-        return obs
+        return obs.astype(np.float32)
 
     def _get_obs(self) -> Dict[str, np.ndarray]:
         return {
@@ -542,10 +588,10 @@ class FoosballVersusEnv(gym.Env):
 
         x, y, z = map(float, self._est_pos)
         vx, vy, vz = map(float, self._est_vel)
-        # Only predict if ball is moving toward the goal.
+        
+        # Only predict if ball is moving toward the goal
         if vx >= -1e-4 and side == "home":
             return None
-        
         if vx <= 1e-4 and side == "away":
             return None
         
@@ -556,13 +602,9 @@ class FoosballVersusEnv(gym.Env):
             goal_rect_x = float(self.sim.goal_rect_x_away)
             goalie_x = float(self.sim.goalie_x_away)
 
-        # Use goalie plane while the ball is in front of the goalie; once it passes, switch to the goal line.
-        # This keeps the predicted intercept consistent with the reward box jump.
         if x <= goalie_x - float(self.sim.ball_radius):
             x_goal = goal_rect_x
         else:
-            # FIX: Use the local `goalie_x` variable instead of `self.sim.goalie_x`
-            # so that away side uses the correct goalie position
             x_goal = goalie_x
             
         y_min = float(self.sim.table_min_local[1] + self.sim.ball_radius)
@@ -593,130 +635,32 @@ class FoosballVersusEnv(gym.Env):
 
         return None
 
-    def _dense_alignment_reward(self, side: str) -> float:
-        """
-        Dense 0..1 reward for being aligned with the predicted intercept line at the player plane.
-        Only paid if ball is moving toward your goal.
-        """
-        vx = float(self._est_vel[0])
-        if side == "home" and vx >= -1e-4:
-            return 0.0
-        if side == "away" and vx <= 1e-4:
-            return 0.0
-
-        intercept = self._predict_goal_intercept_est(side)
-        if intercept is None:
-            return 0.0
-
-        y_pred, z_pred, _, _ = intercept
-
-        # player position / coverage
-        if side == "home":
-            player_c = self.sim.get_player_center_local()
-            y_half = self.sim.get_player_y_halfwidth()
-        else:
-            player_c = self.sim.get_opponent_player_center_local()
-            y_half = self.sim.get_opponent_y_halfwidth()
-            if player_c is None or y_half is None:
-                return 0.0
-
-        y_p = float(player_c[1])
-
-        denom = y_half + float(self.sim.ball_radius)
-
-        y_err = abs(y_pred - y_p)
-        r_close = max(0.0, 1.0 - (y_err / max(denom, 1e-6)))
-        r_tight = max(0.0, 1.0 - (y_err / max(0.4 * denom, 1e-6)))
-
-        # optional: gate by z being inside approximate mouth height
-        z_ok = (self.sim.goal_rect_z_min - 0.02) <= z_pred <= (self.sim.goal_rect_z_max + 0.05)
-
-        if not z_ok:
-            return 0.0
-
-        # Blend close and "right on" tiers
-        return float(0.5 * r_close + 0.5 * r_tight)
-
-    def _kick_velocity_reward(self, side: str, had_contact: bool) -> float:
-        if not had_contact:
-            return 0.0
-        _, vel_true = self.sim.get_ball_true_local_pos_vel()
-        vx = float(vel_true[0])
-        speed = float(np.linalg.norm(vel_true))
-        if side == "home":
-            toward_enemy = vx > 0.05
-        else:
-            toward_enemy = vx < -0.05
-        return float(speed * 0.1) if toward_enemy else 0.0
-
     def _get_rewards(
         self, 
         event: Optional[str], 
-        contacts: Dict[str, bool],
         block_events: Dict[str, bool]
     ) -> Dict[str, float]:
+        """Sparse rewards only: goal allowed = -10, block = +0.5"""
         home = 0.0
         away = 0.0
-        
-        # Compute dense rewards
-        dense_home = self._dense_alignment_reward("home")
-        dense_away = self._dense_alignment_reward("away")
-        kick_home = self._kick_velocity_reward("home", contacts.get("home", False))
-        kick_away = self._kick_velocity_reward("away", contacts.get("away", False))
-        
-        # Reset block reward eligibility when ball starts moving toward opponent's goal
-        # This allows a new block reward if the ball comes back
-        vx = float(self._est_vel[0])
-        if vx > 0.1:  # Ball moving toward away goal -> home can be rewarded again
-            self._block_rewarded["home"] = False
-        if vx < -0.1:  # Ball moving toward home goal -> away can be rewarded again
-            self._block_rewarded["away"] = False
-
-        comps = {
-            "home": {
-                "dense_block": dense_home,
-                "kick_velocity": kick_home,
-                "is_goal": 1.0 if event == "away_goal" else 0.0,
-                "allowed_goal": 1.0 if event == "home_goal" else 0.0,
-                "is_blocking": 1.0 if block_events.get("home", False) else 0.0,
-            },
-            "away": {
-                "dense_block": dense_away,
-                "kick_velocity": kick_away,
-                "is_goal": 1.0 if event == "home_goal" else 0.0,
-                "allowed_goal": 1.0 if event == "away_goal" else 0.0,
-                "is_blocking": 1.0 if block_events.get("away", False) else 0.0,
-            },
-        }
-
-        # Apply dense rewards if enabled
-        if self.use_dense_rewards:
-            home += dense_home + kick_home
-            away += dense_away + kick_away
 
         # Sparse terminal rewards
         if event == "home_goal":
-            away += 10.0
-            home -= 10.0
+            home -= 10.0  # Home allowed a goal
         elif event == "away_goal":
-            home += 10.0
-            away -= 10.0
+            away -= 10.0  # Away allowed a goal
         
-        # Block rewards - only reward once per "attack" (until ball changes direction)
-        if block_events.get("home", False) and not self._block_rewarded["home"]:
+        # Block rewards
+        if block_events.get("home", False):
             home += 0.5
-            away -= 0.5
-            self._block_rewarded["home"] = True
-        if block_events.get("away", False) and not self._block_rewarded["away"]:
+        if block_events.get("away", False):
             away += 0.5
-            home -= 0.5
-            self._block_rewarded["away"] = True
             
+        # Out of bounds penalty for both
         if event == "out":
             home -= 1.0
             away -= 1.0
 
-        self._last_reward_components = comps
         return {"home": float(home), "away": float(away)}
 
     def _get_info(self, event: Optional[str]) -> Dict[str, Any]:
@@ -728,8 +672,6 @@ class FoosballVersusEnv(gym.Env):
 
         return {
             "event": event,
-            "dense_home": float(self._dense_alignment_reward("home")),
-            "dense_away": float(self._dense_alignment_reward("away")),
             "ball_true_pos": pos_true.astype(np.float32),
             "ball_true_vel": vel_true.astype(np.float32),
             "ball_est_pos": self._est_pos.astype(np.float32),
@@ -740,36 +682,39 @@ class FoosballVersusEnv(gym.Env):
             "kicker_home": float(kicker_home),
             "slider_away": float(slider_away) if slider_away is not None else None,
             "kicker_away": float(kicker_away) if kicker_away is not None else None,
-            "reward_components": getattr(self, "_last_reward_components", None),
         }
 
     # ----------------------------
     # Helpers
     # ----------------------------
 
-    def _interp_action(self, a_norm: float, limits) -> float:
+    def _interp_to_limits(self, a_norm: float, limits) -> float:
+        """Map normalized action [-1, 1] to joint limits [lower, upper]."""
         if limits is None:
-            raise RuntimeError("Opponent joint limits not available; update URDF.")
+            raise RuntimeError("Joint limits not available.")
         a_clipped = float(np.clip(a_norm, -1.0, 1.0))
         return limits.lower + (a_clipped + 1.0) * 0.5 * (limits.upper - limits.lower)
 
-    def _interp_velocity(self, a_norm: float, limits) -> float:
-        if limits is None:
-            raise RuntimeError("Opponent joint limits not available; update URDF.")
-        a_clipped = float(np.clip(a_norm, -1.0, 1.0))
-        # Map [-1,1] -> [0, max_vel]; negative still means slow.
-        return float(abs(a_clipped)) * float(limits.velocity)
-
 
 if __name__ == "__main__":
-    # quick smoke test: run random actions (single env rollout)
-    env = FoosballVersusEnv(render_mode="human", seed=0, policy_hz=200.0, sim_hz=1000, serve_side="away")
+    # Quick smoke test with random actions
+    env = FoosballVersusEnv(render_mode="human", seed=0, policy_hz=20.0, sim_hz=1000, serve_side="random")
     obs, info = env.reset()
+    
+    print("Action space:", env.action_space)
+    print("Observation space:", env.observation_space)
+    print("Home obs shape:", obs["home"].shape)
+    print("Away obs shape:", obs["away"].shape)
+    
     while True:
+        # Sample random actions for both sides
+        actions = env.action_space["home"].sample()
         action = {
-            "home": env.action_space["home"].sample(),
-            "away": env.action_space["away"].sample(),
+            "home": actions,
+            "away": actions,
         }
         obs, rewards, terminated, truncated, info = env.step(action)
+        
         if terminated or truncated:
+            print(f"Episode ended: {info.get('event', 'unknown')}, rewards: {rewards}")
             obs, info = env.reset()

@@ -2,3 +2,7 @@ sac*
 action_repeat_2
 
 __pycache__/
+
+*.pt
+*.pth
+selfplay_models/

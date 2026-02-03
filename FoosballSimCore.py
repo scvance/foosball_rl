@@ -7,7 +7,8 @@
 # - Overrides Bullet/URDF velocity caps by:
 #     (1) setting maxVelocity in POSITION_CONTROL every step
 #     (2) attempting changeDynamics(..., maxJointVelocity=...) (best-effort; ignored if unsupported)
-# - Re-applies caps after resets so you don’t “lose” the override.
+# - Re-applies caps after resets so you don't "lose" the override.
+# - Kicker joints now use VELOCITY_CONTROL for continuous spinning with holding torque
 #
 # Notes:
 # - Revolute joint units: rad/s
@@ -57,9 +58,12 @@ class _FoosballSimCore:
         ball_lateral_friction: float = 0.02,
         wall_lateral_friction: float = 0.02,
         add_wall_catchers: bool = False,
-        # ---- NEW: velocity caps you asked for ----
+        # ---- velocity caps ----
         kicker_vel_cap: float = 170.0,   # rad/s
         slider_vel_cap: float = 15.0,    # m/s
+        # ---- kicker control params ----
+        kicker_holding_torque: float = 50.0,  # Nm - torque to hold position when not spinning
+        kicker_spinning_torque: float = 100.0,  # Nm - torque when actively spinning
     ):
         self.use_gui = use_gui
         self.dt = float(time_step)
@@ -77,6 +81,10 @@ class _FoosballSimCore:
         # caps
         self.kicker_vel_cap = float(kicker_vel_cap)
         self.slider_vel_cap = float(slider_vel_cap)
+        
+        # kicker torques
+        self.kicker_holding_torque = float(kicker_holding_torque)
+        self.kicker_spinning_torque = float(kicker_spinning_torque)
 
         self.client = p.connect(p.GUI if use_gui else p.DIRECT)
         p.resetSimulation()
@@ -138,9 +146,17 @@ class _FoosballSimCore:
         self.opponent_kicker_limits = (
             self._get_limits(self.opponent_kicker_idx) if self.opponent_kicker_idx is not None else None
         )
+        
+        # Check if kickers are continuous joints (no limits or very wide limits)
+        self.kicker_is_continuous = self._is_continuous_joint(self.kicker_idx)
+        self.opponent_kicker_is_continuous = (
+            self._is_continuous_joint(self.opponent_kicker_idx) 
+            if self.opponent_kicker_idx is not None else False
+        )
 
-        # Flip opponent kicker by 180 deg (URDF is oriented upside-down); apply as an offset in commands/observations.
-        self.opponent_kicker_offset = math.pi if self.opponent_kicker_idx is not None else 0.0
+        # No offset needed - URDF joint origins are now aligned so both kickers
+        # have toes pointing down at joint angle 0
+        self.opponent_kicker_offset = 0.0
 
         # Disable built-in motors (so we own control)
         self._disable_default_motors()
@@ -237,6 +253,23 @@ class _FoosballSimCore:
             p.disconnect(self.client)
         except Exception:
             pass
+    
+    def _is_continuous_joint(self, joint_idx: int) -> bool:
+        """Check if a joint is continuous (type 0 with no effective limits)."""
+        info = p.getJointInfo(self.robot_uid, joint_idx)
+        joint_type = info[2]
+        lower = info[8]
+        upper = info[9]
+        # Continuous joints in PyBullet are type 0 (revolute) but with lower >= upper
+        # or with very wide limits (e.g., -pi to pi or wider)
+        if joint_type == 0:  # Revolute
+            # Check if limits span >= 2*pi (effectively continuous)
+            if upper - lower >= 2 * math.pi - 0.01:
+                return True
+            # Check if lower >= upper (PyBullet convention for continuous)
+            if lower >= upper:
+                return True
+        return False
 
     def _resolve_mesh_path(self, mesh_filename: str) -> str:
         candidates = [
@@ -302,7 +335,7 @@ class _FoosballSimCore:
                 pass
 
     def reset_robot(self) -> None:
-        self._reset_robot_to_values(0.0, 0.0, 0.0, self.opponent_kicker_offset)
+        self._reset_robot_to_values(0.0, 0.0, 0.0, 0.0)
 
     def reset_robot_randomized(self, rng: random.Random | None = None) -> None:
         if rng is None:
@@ -311,16 +344,24 @@ class _FoosballSimCore:
             return rng.uniform(lim.lower, lim.upper)
 
         slider_home = sample_in_limits(self.slider_limits)
-        kicker_home = sample_in_limits(self.kicker_limits)
+        
+        # For continuous kickers, sample from a reasonable range (e.g., -pi to pi)
+        if self.kicker_is_continuous:
+            kicker_home = rng.uniform(-math.pi, math.pi)
+        else:
+            kicker_home = sample_in_limits(self.kicker_limits)
 
         if self.opponent_slider_limits is not None:
             slider_opp = sample_in_limits(self.opponent_slider_limits)
         else:
             slider_opp = 0.0
-        if self.opponent_kicker_limits is not None:
-            kicker_opp = sample_in_limits(self.opponent_kicker_limits) + self.opponent_kicker_offset
+            
+        if self.opponent_kicker_is_continuous:
+            kicker_opp = rng.uniform(-math.pi, math.pi)
+        elif self.opponent_kicker_limits is not None:
+            kicker_opp = sample_in_limits(self.opponent_kicker_limits)
         else:
-            kicker_opp = self.opponent_kicker_offset
+            kicker_opp = 0.0
 
         self._reset_robot_to_values(slider_home, kicker_home, slider_opp, kicker_opp)
 
@@ -488,80 +529,133 @@ class _FoosballSimCore:
     # ----------------------------
     # Action application
     # ----------------------------
+    
+    def _apply_kicker_control(
+        self,
+        kicker_idx: int,
+        target_velocity: float,
+        is_continuous: bool,
+    ) -> None:
+        """
+        Apply control to a kicker joint.
+        
+        For continuous joints: use velocity control with holding torque when velocity is low.
+        For limited joints: use position control (legacy behavior).
+        
+        Args:
+            kicker_idx: Joint index
+            target_velocity: Target angular velocity in rad/s
+            is_continuous: Whether this is a continuous (unlimited) joint
+            vel_cap: Maximum velocity cap
+        """
+        
+        if is_continuous:
+            # Use velocity control for continuous joints
+            # When target velocity is near zero, apply holding torque
+            if abs(target_velocity) < 0.1:  # Threshold for "holding"
+                # Apply velocity=0 with high torque to hold position
+                p.setJointMotorControl2(
+                    self.robot_uid,
+                    kicker_idx,
+                    controlMode=p.VELOCITY_CONTROL,
+                    targetVelocity=0.0,
+                    force=self.kicker_holding_torque,
+                )
+            else:
+                # Spinning - apply target velocity with spinning torque
+                p.setJointMotorControl2(
+                    self.robot_uid,
+                    kicker_idx,
+                    controlMode=p.VELOCITY_CONTROL,
+                    targetVelocity=target_velocity,
+                    force=self.kicker_spinning_torque,
+                )
+        else:
+            # Legacy position control for limited joints
+            # This shouldn't be used with the new URDF, but kept for compatibility
+            current_pos = p.getJointState(self.robot_uid, kicker_idx)[0]
+            # Move in direction of velocity
+            target_pos = current_pos + target_velocity * self.dt * 10  # Scale factor
+            p.setJointMotorControl2(
+                self.robot_uid,
+                kicker_idx,
+                controlMode=p.POSITION_CONTROL,
+                targetPosition=target_pos,
+                maxVelocity=vel_cap,
+            )
 
     def apply_action_targets(
         self,
         slider_target: float,
-        kicker_target: float,
+        kicker_velocity: float,
         slider_vel_cap: Optional[float] = None,
-        kicker_vel_cap: Optional[float] = None,
         slider_force: Optional[float] = None,
         kicker_force: Optional[float] = None,
     ):
         """
-        POSITION_CONTROL with explicit velocity caps.
-        We intentionally do NOT respect URDF velocity limits here (since you want to override Bullet/URDF caps).
-        If you want to respect URDF limits, clamp here using min(cap, self.*_limits.velocity).
+        Apply control targets for home goalie.
+        
+        Args:
+            slider_target: Target position for slider (will be clamped to limits)
+            kicker_velocity: Target velocity for kicker in rad/s (continuous joints)
+                            or target position for limited joints
+            slider_vel_cap: Max velocity for slider
         """
         s_cap = self.slider_vel_cap if slider_vel_cap is None else float(abs(slider_vel_cap))
-        k_cap = self.kicker_vel_cap if kicker_vel_cap is None else float(abs(kicker_vel_cap))
 
-        # s_force = float(self.slider_limits.effort) if slider_force is None else float(abs(slider_force))
-        # k_force = float(self.kicker_limits.effort) if kicker_force is None else float(abs(kicker_force))
-
-        # Clamp targets to joint limits
+        # Clamp slider target to joint limits
         slider_target = self._clamp_to_limits(float(slider_target), self.slider_limits)
-        kicker_target = self._clamp_to_limits(float(kicker_target), self.kicker_limits)
-        # print("Applying action targets: slider_target =", slider_target, "kicker_target =", kicker_target)
-        # print("With caps: s_cap =", s_cap, "k_cap =", k_cap, "s_force =", s_force, "k_force =", k_force)
-        # print("Joint limits: slider_limits =", self.slider_limits, "kicker_limits =", self.kicker_limits)
 
+        # Apply slider position control
         p.setJointMotorControl2(
             self.robot_uid,
             self.slider_idx,
             controlMode=p.POSITION_CONTROL,
             targetPosition=float(slider_target),
-            # force=s_force,
             maxVelocity=float(s_cap),
         )
-        p.setJointMotorControl2(
-            self.robot_uid,
+        
+        # Apply kicker control (velocity for continuous, position for limited)
+        self._apply_kicker_control(
             self.kicker_idx,
-            controlMode=p.POSITION_CONTROL,
-            targetPosition=float(kicker_target),
-            # force=k_force,
-            maxVelocity=float(k_cap),
+            float(kicker_velocity),
+            self.kicker_is_continuous,
         )
 
     def apply_action_targets_dual(
         self,
         home_slider_target: float,
-        home_kicker_target: float,
+        home_kicker_velocity: float,
         away_slider_target: Optional[float],
-        away_kicker_target: Optional[float],
+        away_kicker_velocity: Optional[float],
         home_slider_vel_cap: Optional[float] = None,
-        home_kicker_vel_cap: Optional[float] = None,
         away_slider_vel_cap: Optional[float] = None,
-        away_kicker_vel_cap: Optional[float] = None,
         home_slider_force: Optional[float] = None,
         home_kicker_force: Optional[float] = None,
         away_slider_force: Optional[float] = None,
         away_kicker_force: Optional[float] = None,
     ):
-        """Apply targets for both goalies; away targets are ignored if opponent joints are missing."""
+        """
+        Apply targets for both goalies.
+        
+        Args:
+            home_slider_target: Target position for home slider
+            home_kicker_velocity: Target velocity for home kicker (rad/s)
+            away_slider_target: Target position for away slider
+            away_kicker_velocity: Target velocity for away kicker (rad/s)
+        """
+        # Apply home goalie controls
         self.apply_action_targets(
             home_slider_target,
-            home_kicker_target,
+            home_kicker_velocity,
             slider_vel_cap=home_slider_vel_cap,
-            kicker_vel_cap=home_kicker_vel_cap,
             slider_force=home_slider_force,
             kicker_force=home_kicker_force,
         )
 
-        # Opponent slider
+        # Opponent slider - position control
         if self.opponent_slider_idx is not None and away_slider_target is not None and self.opponent_slider_limits is not None:
             s_cap = self.slider_vel_cap if away_slider_vel_cap is None else float(abs(away_slider_vel_cap))
-            s_force = float(self.opponent_slider_limits.effort) if away_slider_force is None else float(abs(away_slider_force))
             away_slider_target = self._clamp_to_limits(float(away_slider_target), self.opponent_slider_limits)
 
             p.setJointMotorControl2(
@@ -569,25 +663,16 @@ class _FoosballSimCore:
                 self.opponent_slider_idx,
                 controlMode=p.POSITION_CONTROL,
                 targetPosition=float(away_slider_target),
-                force=float(s_force),
                 maxVelocity=float(s_cap),
             )
 
-        # Opponent kicker (apply offset into internal joint coordinate)
-        if self.opponent_kicker_idx is not None and away_kicker_target is not None and self.opponent_kicker_limits is not None:
-            k_cap = self.kicker_vel_cap if away_kicker_vel_cap is None else float(abs(away_kicker_vel_cap))
-            k_force = float(self.opponent_kicker_limits.effort) if away_kicker_force is None else float(abs(away_kicker_force))
-
-            away_kicker_target = float(away_kicker_target) + float(self.opponent_kicker_offset)
-            away_kicker_target = self._clamp_to_limits(float(away_kicker_target), self.opponent_kicker_limits)
-
-            p.setJointMotorControl2(
-                self.robot_uid,
+        # Opponent kicker - velocity control for continuous joints
+        if self.opponent_kicker_idx is not None and away_kicker_velocity is not None:
+            
+            self._apply_kicker_control(
                 self.opponent_kicker_idx,
-                controlMode=p.POSITION_CONTROL,
-                targetPosition=float(away_kicker_target),
-                force=float(k_force),
-                maxVelocity=float(k_cap),
+                float(away_kicker_velocity),
+                self.opponent_kicker_is_continuous,
             )
 
     # ----------------------------
@@ -652,7 +737,6 @@ class _FoosballSimCore:
         Returns dict with the chosen parameters (for debugging).
         """
         self.remove_ball()
-        # breakpoint()
 
         margin = self.ball_radius + 0.02
         x_min, y_min, _ = self.table_min_local
@@ -1339,6 +1423,15 @@ class _FoosballSimCore:
         kicker_idx: Optional[int],
         counter_attr: str,
     ) -> bool:
+        """
+        Detect a block event for a specific goal.
+        
+        A block requires EITHER:
+        1. Contact with the goalie's kicker in the defense zone
+        2. Ball stopped near the goal (sustained low speed in defense zone)
+        
+        The "reversal" heuristic is ONLY applied if there was recent contact.
+        """
         defense_zone = abs(x - goal_x) < 0.15
 
         # Contact with player link (if provided)
@@ -1347,7 +1440,7 @@ class _FoosballSimCore:
             contacts = p.getContactPoints(bodyA=self.ball_id, bodyB=self.robot_uid, linkIndexB=kicker_idx)
             had_contact = contacts is not None and len(contacts) > 0
 
-        # Stop condition (sustained)
+        # Stop condition (sustained low speed in defense zone)
         steps = getattr(self, counter_attr)
         if defense_zone and speed < 0.1:
             steps += 1
@@ -1355,18 +1448,21 @@ class _FoosballSimCore:
             steps = 0
         setattr(self, counter_attr, steps)
 
+        # Sustained stop = block (ball got trapped/stopped by goalie)
         if steps >= 5:
             return True
 
-        # Basic "reversal" heuristic: if ball is near goal plane and velocity now points away from goal.
-        toward_goal = (goal_x < x and vx < -0.08) or (goal_x > x and vx > 0.08)
-        if not toward_goal and abs(vx) > 0.1:
-            return True
-
-        # Contact-based block (immediate)
+        # Contact-based block: goalie touched ball in defense zone
         if defense_zone and had_contact:
             return True
 
+        # NOTE: Removed the "reversal" heuristic that was triggering false blocks.
+        # The reversal detection was: if ball not moving toward goal and has velocity,
+        # call it a block. This caused false positives when:
+        # - Ball bounced off walls
+        # - Ball naturally slowed/changed direction
+        # - Ball was served and hadn't reached the goal yet
+        
         return False
 
     # ----------------------------
