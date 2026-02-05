@@ -6,9 +6,12 @@ so the policy always sees the game from "home" perspective.
 
 Key design:
 - Policy sees single-agent obs (21 dims) and action (3 dims) spaces
-- Each underlying env step, we only train the DEFENDING side
-- This eliminates noise from the non-defending side's experiences
-- SB3 sees n_envs environments (one per underlying env)
+- SB3 sees 2*n_underlying_envs virtual environments:
+  - Even indices (0, 2, 4, ...) = home sides
+  - Odd indices (1, 3, 5, ...) = away sides
+- Policy steps once for home obs, once for away obs
+- step_async pairs actions: (action[0], action[1]) sent to env 0, etc.
+- Logging is per underlying env (not per virtual env) to avoid duplication
 
 Uses multiprocessing for parallel environment execution.
 """
@@ -37,33 +40,12 @@ from foosball_envs.FoosballVersusEnv import FoosballVersusEnv
 def _worker(remote, parent_remote, env_fn):
     """
     Worker process that runs a single FoosballVersusEnv.
-
-    Key insight: We determine which side is defending based on ball velocity,
-    and only return that side's experience. The other side's action is still
-    applied (for physics), but we don't train on it.
+    
+    Returns dict observations and rewards matching the underlying env.
+    Info dict contains event, rewards, etc. for logging.
     """
     parent_remote.close()
     env = env_fn()
-
-    # Track current defending side
-    defending_side = "home"  # Will be updated on reset
-
-    def get_defending_side():
-        """Determine which side is defending based on ball velocity."""
-        try:
-            ball_vel = env._est_vel
-            vx = float(ball_vel[0])
-            # Ball moving left (negative x) -> heading to home goal -> home defends
-            # Ball moving right (positive x) -> heading to away goal -> away defends
-            if vx < -0.1:
-                return "home"
-            elif vx > 0.1:
-                return "away"
-            else:
-                # Ball nearly stationary, keep current
-                return defending_side
-        except:
-            return "home"
 
     while True:
         try:
@@ -77,50 +59,28 @@ def _worker(remote, parent_remote, env_fn):
             obs_dict, reward_dict, terminated, truncated, info = env.step(action_dict)
             done = terminated or truncated
 
-            # Determine which side was defending this step
-            # Use the side we identified at the start of step
-            current_defending = defending_side
-
-            # Update defending side for next step
-            defending_side = get_defending_side()
-
-            # Get the defending side's data
-            if current_defending == "home":
-                obs = obs_dict["home"]
-                reward = reward_dict["home"]
-                action_used = home_action
-            else:
-                obs = obs_dict["away"]
-                reward = reward_dict["away"]
-                action_used = away_action
-
-            info["defending_side"] = current_defending
+            # Include rewards in info for logging
             info["reward_home"] = reward_dict["home"]
             info["reward_away"] = reward_dict["away"]
 
             # Auto-reset on done
+            new_obs_dict = None
             if done:
-                info["terminal_observation"] = obs.copy()
-                obs_dict_new, reset_info = env.reset()
-                # After reset, determine new defending side
-                defending_side = get_defending_side()
-                # Return the new defending side's observation
-                if defending_side == "home":
-                    obs = obs_dict_new["home"]
-                else:
-                    obs = obs_dict_new["away"]
+                info["terminal_observation_home"] = obs_dict["home"].copy()
+                info["terminal_observation_away"] = obs_dict["away"].copy()
+                new_obs_dict, reset_info = env.reset()
 
-            remote.send((obs, reward, done, info, defending_side))
+            remote.send((
+                obs_dict["home"], obs_dict["away"],
+                reward_dict["home"], reward_dict["away"],
+                done, info,
+                new_obs_dict["home"] if new_obs_dict else None,
+                new_obs_dict["away"] if new_obs_dict else None,
+            ))
 
         elif cmd == "reset":
             obs_dict, info = env.reset()
-            # Determine initial defending side
-            defending_side = get_defending_side()
-            if defending_side == "home":
-                obs = obs_dict["home"]
-            else:
-                obs = obs_dict["away"]
-            remote.send((obs, info, defending_side))
+            remote.send((obs_dict["home"], obs_dict["away"], info))
 
         elif cmd == "close":
             remote.close()
@@ -138,32 +98,31 @@ def _worker(remote, parent_remote, env_fn):
             raise NotImplementedError(f"Unknown command: {cmd}")
 
 
-class SelfPlayDefenderVecEnv(VecEnv):
+class SelfPlayVecEnv(VecEnv):
     """
-    Vectorized self-play environment that only trains the defending side.
+    Vectorized self-play environment.
 
     Each underlying FoosballVersusEnv runs in its own subprocess.
+    SB3 sees 2*n_underlying_envs virtual environments:
+    - Virtual envs 0, 2, 4, ... are home sides
+    - Virtual envs 1, 3, 5, ... are away sides
+    
     On each step:
-    1. SB3 provides n actions (one per env)
-    2. We use each action for BOTH home and away in that env
-    3. We return only the DEFENDING side's observation and reward
-    4. This ensures 100% of experiences are relevant
-
-    The key insight: since the policy is mirrored, using the same action
-    for both sides is equivalent to having two independent policies that
-    happen to be identical.
+    1. SB3 provides 2*n actions (policy stepped once per virtual env)
+    2. We pair them: (action[0], action[1]) for underlying env 0, etc.
+    3. We return observations and rewards for both sides
+    
+    Info is returned per underlying env (attached to home virtual env only)
+    to avoid duplicate logging.
     """
 
     def __init__(self, env_fns: List):
-        self.n_envs = len(env_fns)
+        self.n_underlying_envs = len(env_fns)
         self.waiting = False
         self.closed = False
 
-        # Track which side is defending in each env
-        self._defending_sides: List[str] = ["home"] * self.n_envs
-
         # Create pipes and processes
-        self.remotes, self.work_remotes = zip(*[Pipe() for _ in range(self.n_envs)])
+        self.remotes, self.work_remotes = zip(*[Pipe() for _ in range(self.n_underlying_envs)])
         self.processes = []
 
         for work_remote, remote, env_fn in zip(self.work_remotes, self.remotes, env_fns):
@@ -180,49 +139,78 @@ class SelfPlayDefenderVecEnv(VecEnv):
         obs_space = obs_space_dict["home"]
         act_space = act_space_dict["home"]
 
-        super().__init__(self.n_envs, obs_space, act_space)
+        # SB3 sees 2x the number of underlying envs
+        n_virtual_envs = 2 * self.n_underlying_envs
+        super().__init__(n_virtual_envs, obs_space, act_space)
 
     def reset(self) -> np.ndarray:
-        """Reset all envs and return observations from defending sides."""
+        """Reset all envs and return observations from both sides."""
         for remote in self.remotes:
             remote.send(("reset", None))
 
         results = [remote.recv() for remote in self.remotes]
 
-        obs = np.zeros((self.n_envs,) + self.observation_space.shape, dtype=np.float32)
-        for i, (ob, info, defending_side) in enumerate(results):
-            obs[i] = ob
-            self._defending_sides[i] = defending_side
+        obs = np.zeros((self.num_envs,) + self.observation_space.shape, dtype=np.float32)
+        for i, (home_obs, away_obs, info) in enumerate(results):
+            obs[2 * i] = home_obs      # Even indices = home
+            obs[2 * i + 1] = away_obs  # Odd indices = away
 
         return obs
 
     def step_async(self, actions: np.ndarray) -> None:
-        """Send actions to workers. Each action is used for BOTH sides."""
+        """
+        Send actions to workers.
+        
+        Actions are paired: action[2*i] is home, action[2*i+1] is away
+        for underlying env i.
+        """
         self.waiting = True
 
         for i, remote in enumerate(self.remotes):
-            # Use the same action for both home and away
-            # The observation is already from the defending side's perspective
-            action = actions[i]
-            remote.send(("step", (action, action)))
+            home_action = actions[2 * i]
+            away_action = actions[2 * i + 1]
+            remote.send(("step", (home_action, away_action)))
 
     def step_wait(self) -> Tuple[np.ndarray, np.ndarray, np.ndarray, List[Dict]]:
-        """Wait for results from workers."""
+        """
+        Wait for results from workers.
+        
+        Returns observations and rewards for all virtual envs.
+        Info dicts contain full env info only for home (even) indices
+        to avoid duplicate logging. Away (odd) indices get minimal info.
+        """
         self.waiting = False
 
         results = [remote.recv() for remote in self.remotes]
 
-        obs = np.zeros((self.n_envs,) + self.observation_space.shape, dtype=np.float32)
-        rewards = np.zeros(self.n_envs, dtype=np.float32)
-        dones = np.zeros(self.n_envs, dtype=bool)
+        obs = np.zeros((self.num_envs,) + self.observation_space.shape, dtype=np.float32)
+        rewards = np.zeros(self.num_envs, dtype=np.float32)
+        dones = np.zeros(self.num_envs, dtype=bool)
         infos: List[Dict] = []
 
-        for i, (ob, reward, done, info, defending_side) in enumerate(results):
-            obs[i] = ob
-            rewards[i] = reward
-            dones[i] = done
-            infos.append(info)
-            self._defending_sides[i] = defending_side
+        for i, (home_obs, away_obs, home_reward, away_reward, done, info, new_home_obs, new_away_obs) in enumerate(results):
+            # Home side (even index) - gets full info for logging
+            home_info = info.copy()
+            home_info["is_home"] = True
+            if done and new_home_obs is not None:
+                home_info["terminal_observation"] = info["terminal_observation_home"]
+                obs[2 * i] = new_home_obs
+            else:
+                obs[2 * i] = home_obs
+            rewards[2 * i] = home_reward
+            dones[2 * i] = done
+            infos.append(home_info)
+
+            # Away side (odd index) - minimal info to avoid duplicate logging
+            away_info = {"is_home": False}
+            if done and new_away_obs is not None:
+                away_info["terminal_observation"] = info["terminal_observation_away"]
+                obs[2 * i + 1] = new_away_obs
+            else:
+                obs[2 * i + 1] = away_obs
+            rewards[2 * i + 1] = away_reward
+            dones[2 * i + 1] = done
+            infos.append(away_info)
 
         return obs, rewards, dones, infos
 
@@ -272,16 +260,23 @@ def create_selfplay_vec_env(
     n_envs: int,
     seed: int,
     **env_kwargs,
-) -> SelfPlayDefenderVecEnv:
-    """Create a SelfPlayDefenderVecEnv with n_envs underlying FoosballVersusEnvs."""
+) -> SelfPlayVecEnv:
+    """
+    Create a SelfPlayVecEnv with n_envs underlying FoosballVersusEnvs.
+    
+    Note: SB3 will see 2*n_envs virtual environments.
+    """
     env_fns = [EnvFactory(seed, i, env_kwargs) for i in range(n_envs)]
-    return SelfPlayDefenderVecEnv(env_fns)
+    return SelfPlayVecEnv(env_fns)
 
 
 class SelfPlayStatsCallback(BaseCallback):
     """
     Logs self-play statistics to TensorBoard.
-    Tracks goals, blocks, and win rates.
+    
+    Only processes info from home (even) indices to avoid duplicate counting,
+    since each underlying env step produces one info dict attached to the
+    home virtual env.
     """
 
     def __init__(self, rolling_window: int = 100, verbose: int = 0):
@@ -293,6 +288,10 @@ class SelfPlayStatsCallback(BaseCallback):
         self.home_blocks = deque(maxlen=rolling_window)
         self.away_blocks = deque(maxlen=rolling_window)
         self.outs = deque(maxlen=rolling_window)
+        
+        # Reward tracking
+        self.home_rewards = deque(maxlen=rolling_window * 100)  # More samples for rewards
+        self.away_rewards = deque(maxlen=rolling_window * 100)
 
         self.total_home_goals = 0
         self.total_away_goals = 0
@@ -305,6 +304,16 @@ class SelfPlayStatsCallback(BaseCallback):
         infos = self.locals.get("infos", [])
 
         for info in infos:
+            # Only process home (even) indices to avoid duplicate logging
+            if not info.get("is_home", False):
+                continue
+            
+            # Log rewards per step
+            if "reward_home" in info:
+                self.home_rewards.append(info["reward_home"])
+                self.away_rewards.append(info["reward_away"])
+                
+            # Log events (episode termination)
             event = info.get("event")
             if event is None:
                 continue
@@ -329,6 +338,7 @@ class SelfPlayStatsCallback(BaseCallback):
             self.total_away_blocks += is_away_block
             self.total_outs += is_out
 
+        # Log to tensorboard
         if self.total_episodes > 0:
             self.logger.record("selfplay/total_episodes", self.total_episodes)
             self.logger.record("selfplay/home_goals_total", self.total_home_goals)
@@ -347,6 +357,11 @@ class SelfPlayStatsCallback(BaseCallback):
                 self.logger.record("selfplay/home_block_rate", np.mean(self.home_blocks))
                 self.logger.record("selfplay/away_block_rate", np.mean(self.away_blocks))
                 self.logger.record("selfplay/out_rate", np.mean(self.outs))
+        
+        # Log reward stats
+        if len(self.home_rewards) > 0:
+            self.logger.record("selfplay/mean_home_reward", np.mean(self.home_rewards))
+            self.logger.record("selfplay/mean_away_reward", np.mean(self.away_rewards))
 
         return True
 
@@ -369,7 +384,7 @@ def main():
     parser.add_argument("--serve_side", type=str, default="random")
 
     # Physics
-    parser.add_argument("--speed_min", type=float, default=2.0)
+    parser.add_argument("--speed_min", type=float, default=1.0)
     parser.add_argument("--speed_max", type=float, default=15.0)
     parser.add_argument("--bounce_prob", type=float, default=0.25)
     parser.add_argument("--num_substeps", type=int, default=8)
@@ -377,9 +392,9 @@ def main():
     # SAC params
     parser.add_argument("--device", type=str, default="auto")
     parser.add_argument("--learning_rate", type=float, default=3e-4)
-    parser.add_argument("--buffer_size", type=int, default=1_000_000)
+    parser.add_argument("--buffer_size", type=int, default=100_000)
     parser.add_argument("--learning_starts", type=int, default=10_000)
-    parser.add_argument("--batch_size", type=int, default=64)
+    parser.add_argument("--batch_size", type=int, default=256)
     parser.add_argument("--tau", type=float, default=0.005)
     parser.add_argument("--gamma", type=float, default=0.99)
 
@@ -413,7 +428,7 @@ def main():
         real_time_gui=False,
     )
 
-    print(f"Creating {args.n_envs} envs (training ONLY defending side each step)...")
+    print(f"Creating {args.n_envs} underlying envs ({2*args.n_envs} virtual envs for SB3)...")
 
     # Create self-play vectorized environment
     train_env = create_selfplay_vec_env(
@@ -433,12 +448,13 @@ def main():
 
     print(f"Observation space: {train_env.observation_space}")
     print(f"Action space: {train_env.action_space}")
-    print(f"Num envs: {train_env.num_envs}")
+    print(f"Num virtual envs (SB3 sees): {train_env.num_envs}")
+    print(f"Num underlying envs: {args.n_envs}")
 
     # Select device
     if args.device == "auto":
         if torch.backends.mps.is_available():
-            device = "cpu"
+            device = "cpu"  # MPS often slower for small networks
         elif torch.cuda.is_available():
             device = "cuda"
         else:

@@ -298,7 +298,7 @@ class FoosballVersusEnv(gym.Env):
                 break
 
         self._terminated_event = event
-        rewards = self._get_rewards(event, block_events)
+        rewards = self._get_rewards(event, block_events, action)
 
         if self._episode_step >= self.max_episode_steps:
             truncated = True
@@ -638,7 +638,8 @@ class FoosballVersusEnv(gym.Env):
     def _get_rewards(
         self, 
         event: Optional[str], 
-        block_events: Dict[str, bool]
+        block_events: Dict[str, bool],
+        actions: Dict[str, np.ndarray],
     ) -> Dict[str, float]:
         """Sparse rewards only: goal allowed = -10, block = +0.5"""
         home = 0.0
@@ -646,9 +647,9 @@ class FoosballVersusEnv(gym.Env):
 
         # Sparse terminal rewards
         if event == "home_goal":
-            home -= 10.0  # Home allowed a goal
+            home -= 1.0  # Home allowed a goal
         elif event == "away_goal":
-            away -= 10.0  # Away allowed a goal
+            away -= 1.0  # Away allowed a goal
         
         # Block rewards
         if block_events.get("home", False):
@@ -658,8 +659,14 @@ class FoosballVersusEnv(gym.Env):
             
         # Out of bounds penalty for both
         if event == "out":
-            home -= 1.0
-            away -= 1.0
+            home -= 0.5
+            away -= 0.5
+
+        # Slight penalty for large actions to encourage smoother control
+        a_home = np.asarray(actions["home"], dtype=np.float32).reshape(-1)
+        a_away = np.asarray(actions["away"], dtype=np.float32).reshape(-1)
+        home -= 0.001 * float(np.linalg.norm(a_home))
+        away -= 0.001 * float(np.linalg.norm(a_away))
 
         return {"home": float(home), "away": float(away)}
 
