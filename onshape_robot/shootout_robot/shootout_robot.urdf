@@ -1,0 +1,1059 @@
+<?xml version="1.0" ?>
+<!-- Generated using onshape-to-robot -->
+<!-- Onshape https://cad.onshape.com/documents/e803f61fd7378df7db81a183/w/36ce3c529374e351e627bf1e/e/3d3a9ff97999c9efcbc3211d -->
+<robot name="shootout_robot">
+  <!-- Link angle_wall_ball_catch -->
+  <link name="angle_wall_ball_catch">
+    <inertial>
+      <origin xyz="-1.54887e-14 1.03776e-05 -0.0452668" rpy="0 0 0"/>
+      <mass value="45.9487"/>
+      <inertia ixx="3.18407" ixy="-2.02549e-16" ixz="-3.13415e-12" iyy="11.4555" iyz="-0.00497854" izz="12.7025"/>
+    </inertial>
+    <!-- Part rail -->
+    <visual>
+      <origin xyz="0 0 0" rpy="0 -0 0"/>
+      <geometry>
+        <mesh filename="package://assets/rail.stl"/>
+      </geometry>
+      <material name="rail_material">
+        <color rgba="0.901961 0.901961 0.901961 1"/>
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 -0 0"/>
+      <geometry>
+        <mesh filename="package://assets/rail.stl"/>
+      </geometry>
+    </collision>
+    <!-- Part other_angled_ball_return -->
+    <visual>
+      <origin xyz="0 0 0" rpy="0 -0 0"/>
+      <geometry>
+        <mesh filename="package://assets/other_angled_ball_return.stl"/>
+      </geometry>
+      <material name="other_angled_ball_return_material">
+        <color rgba="0.65098 0.486275 0.0196078 1"/>
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 -0 0"/>
+      <geometry>
+        <mesh filename="package://assets/other_angled_ball_return.stl"/>
+      </geometry>
+    </collision>
+    <!-- Part other_back_wall -->
+    <visual>
+      <origin xyz="0 0 0" rpy="0 -0 0"/>
+      <geometry>
+        <mesh filename="package://assets/other_back_wall.stl"/>
+      </geometry>
+      <material name="other_back_wall_material">
+        <color rgba="0.917647 0.917647 0.917647 1"/>
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 -0 0"/>
+      <geometry>
+        <mesh filename="package://assets/other_back_wall.stl"/>
+      </geometry>
+    </collision>
+    <!-- Part rib5 -->
+    <visual>
+      <origin xyz="0 0 0" rpy="0 -0 0"/>
+      <geometry>
+        <mesh filename="package://assets/rib5.stl"/>
+      </geometry>
+      <material name="rib5_material">
+        <color rgba="0.65098 0.486275 0.0196078 1"/>
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 -0 0"/>
+      <geometry>
+        <mesh filename="package://assets/rib5.stl"/>
+      </geometry>
+    </collision>
+    <!-- Part rail_2 -->
+    <visual>
+      <origin xyz="0 0 0" rpy="0 -0 0"/>
+      <geometry>
+        <mesh filename="package://assets/rail__2.stl"/>
+      </geometry>
+      <material name="rail_2_material">
+        <color rgba="0.901961 0.901961 0.901961 1"/>
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 -0 0"/>
+      <geometry>
+        <mesh filename="package://assets/rail__2.stl"/>
+      </geometry>
+    </collision>
+    <!-- Part rail_3 -->
+    <visual>
+      <origin xyz="0 0 0" rpy="0 -0 0"/>
+      <geometry>
+        <mesh filename="package://assets/rail__3.stl"/>
+      </geometry>
+      <material name="rail_3_material">
+        <color rgba="0.901961 0.901961 0.901961 1"/>
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 -0 0"/>
+      <geometry>
+        <mesh filename="package://assets/rail__3.stl"/>
+      </geometry>
+    </collision>
+    <!-- Part long_wall -->
+    <visual>
+      <origin xyz="0 0 0" rpy="0 -0 0"/>
+      <geometry>
+        <mesh filename="package://assets/long_wall.stl"/>
+      </geometry>
+      <material name="long_wall_material">
+        <color rgba="0.917647 0.917647 0.917647 1"/>
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 -0 0"/>
+      <geometry>
+        <mesh filename="package://assets/long_wall.stl"/>
+      </geometry>
+    </collision>
+    <!-- Part rail_4 -->
+    <visual>
+      <origin xyz="0 0 0" rpy="0 -0 0"/>
+      <geometry>
+        <mesh filename="package://assets/rail__4.stl"/>
+      </geometry>
+      <material name="rail_4_material">
+        <color rgba="0.901961 0.901961 0.901961 1"/>
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 -0 0"/>
+      <geometry>
+        <mesh filename="package://assets/rail__4.stl"/>
+      </geometry>
+    </collision>
+    <!-- Part middle_ball_return_rail -->
+    <visual>
+      <origin xyz="0 0 0" rpy="0 -0 0"/>
+      <geometry>
+        <mesh filename="package://assets/middle_ball_return_rail.stl"/>
+      </geometry>
+      <material name="middle_ball_return_rail_material">
+        <color rgba="0.901961 0.901961 0.901961 1"/>
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 -0 0"/>
+      <geometry>
+        <mesh filename="package://assets/middle_ball_return_rail.stl"/>
+      </geometry>
+    </collision>
+    <!-- Part underboard -->
+    <visual>
+      <origin xyz="0 0 0" rpy="0 -0 0"/>
+      <geometry>
+        <mesh filename="package://assets/underboard.stl"/>
+      </geometry>
+      <material name="underboard_material">
+        <color rgba="0.65098 0.486275 0.0196078 1"/>
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 -0 0"/>
+      <geometry>
+        <mesh filename="package://assets/underboard.stl"/>
+      </geometry>
+    </collision>
+    <!-- Part linear_rod -->
+    <visual>
+      <origin xyz="0 0 0" rpy="0 -0 0"/>
+      <geometry>
+        <mesh filename="package://assets/linear_rod.stl"/>
+      </geometry>
+      <material name="linear_rod_material">
+        <color rgba="0.647059 0.647059 0.647059 1"/>
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 -0 0"/>
+      <geometry>
+        <mesh filename="package://assets/linear_rod.stl"/>
+      </geometry>
+    </collision>
+    <!-- Part rib5_2 -->
+    <visual>
+      <origin xyz="0 0 0" rpy="0 -0 0"/>
+      <geometry>
+        <mesh filename="package://assets/rib5__2.stl"/>
+      </geometry>
+      <material name="rib5_2_material">
+        <color rgba="0.65098 0.486275 0.0196078 1"/>
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 -0 0"/>
+      <geometry>
+        <mesh filename="package://assets/rib5__2.stl"/>
+      </geometry>
+    </collision>
+    <!-- Part rib4 -->
+    <visual>
+      <origin xyz="0 0 0" rpy="0 -0 0"/>
+      <geometry>
+        <mesh filename="package://assets/rib4.stl"/>
+      </geometry>
+      <material name="rib4_material">
+        <color rgba="0.65098 0.486275 0.0196078 1"/>
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 -0 0"/>
+      <geometry>
+        <mesh filename="package://assets/rib4.stl"/>
+      </geometry>
+    </collision>
+    <!-- Part rib3 -->
+    <visual>
+      <origin xyz="0 0 0" rpy="0 -0 0"/>
+      <geometry>
+        <mesh filename="package://assets/rib3.stl"/>
+      </geometry>
+      <material name="rib3_material">
+        <color rgba="0.65098 0.486275 0.0196078 1"/>
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 -0 0"/>
+      <geometry>
+        <mesh filename="package://assets/rib3.stl"/>
+      </geometry>
+    </collision>
+    <!-- Part other_long_wall -->
+    <visual>
+      <origin xyz="0 0 0" rpy="0 -0 0"/>
+      <geometry>
+        <mesh filename="package://assets/other_long_wall.stl"/>
+      </geometry>
+      <material name="other_long_wall_material">
+        <color rgba="0.917647 0.917647 0.917647 1"/>
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 -0 0"/>
+      <geometry>
+        <mesh filename="package://assets/other_long_wall.stl"/>
+      </geometry>
+    </collision>
+    <!-- Part angle_wall_ball_catch -->
+    <visual>
+      <origin xyz="0 0 0" rpy="0 -0 0"/>
+      <geometry>
+        <mesh filename="package://assets/angle_wall_ball_catch.stl"/>
+      </geometry>
+      <material name="angle_wall_ball_catch_material">
+        <color rgba="0.498039 0.498039 0.498039 1"/>
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 -0 0"/>
+      <geometry>
+        <mesh filename="package://assets/angle_wall_ball_catch.stl"/>
+      </geometry>
+    </collision>
+    <!-- Part rail_5 -->
+    <visual>
+      <origin xyz="0 0 0" rpy="0 -0 0"/>
+      <geometry>
+        <mesh filename="package://assets/rail__5.stl"/>
+      </geometry>
+      <material name="rail_5_material">
+        <color rgba="0.901961 0.901961 0.901961 1"/>
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 -0 0"/>
+      <geometry>
+        <mesh filename="package://assets/rail__5.stl"/>
+      </geometry>
+    </collision>
+    <!-- Part top_down_rail -->
+    <visual>
+      <origin xyz="0 0 0" rpy="0 -0 0"/>
+      <geometry>
+        <mesh filename="package://assets/top_down_rail.stl"/>
+      </geometry>
+      <material name="top_down_rail_material">
+        <color rgba="0.901961 0.901961 0.901961 1"/>
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 -0 0"/>
+      <geometry>
+        <mesh filename="package://assets/top_down_rail.stl"/>
+      </geometry>
+    </collision>
+    <!-- Part tabletop -->
+    <visual>
+      <origin xyz="0 0 0" rpy="0 -0 0"/>
+      <geometry>
+        <mesh filename="package://assets/tabletop.stl"/>
+      </geometry>
+      <material name="tabletop_material">
+        <color rgba="0.796078 0.905882 0.745098 1"/>
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 -0 0"/>
+      <geometry>
+        <mesh filename="package://assets/tabletop.stl"/>
+      </geometry>
+    </collision>
+    <!-- Part top_wall -->
+    <visual>
+      <origin xyz="0 0 0" rpy="0 -0 0"/>
+      <geometry>
+        <mesh filename="package://assets/top_wall.stl"/>
+      </geometry>
+      <material name="top_wall_material">
+        <color rgba="0.498039 0.498039 0.498039 1"/>
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 -0 0"/>
+      <geometry>
+        <mesh filename="package://assets/top_wall.stl"/>
+      </geometry>
+    </collision>
+    <!-- Part top_ball_return_rail -->
+    <visual>
+      <origin xyz="0 0 0" rpy="0 -0 0"/>
+      <geometry>
+        <mesh filename="package://assets/top_ball_return_rail.stl"/>
+      </geometry>
+      <material name="top_ball_return_rail_material">
+        <color rgba="0.901961 0.901961 0.901961 1"/>
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 -0 0"/>
+      <geometry>
+        <mesh filename="package://assets/top_ball_return_rail.stl"/>
+      </geometry>
+    </collision>
+    <!-- Part other_top_wall -->
+    <visual>
+      <origin xyz="0 0 0" rpy="0 -0 0"/>
+      <geometry>
+        <mesh filename="package://assets/other_top_wall.stl"/>
+      </geometry>
+      <material name="other_top_wall_material">
+        <color rgba="0.498039 0.498039 0.498039 1"/>
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 -0 0"/>
+      <geometry>
+        <mesh filename="package://assets/other_top_wall.stl"/>
+      </geometry>
+    </collision>
+    <!-- Part back_wall -->
+    <visual>
+      <origin xyz="0 0 0" rpy="0 -0 0"/>
+      <geometry>
+        <mesh filename="package://assets/back_wall.stl"/>
+      </geometry>
+      <material name="back_wall_material">
+        <color rgba="0.917647 0.917647 0.917647 1"/>
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 -0 0"/>
+      <geometry>
+        <mesh filename="package://assets/back_wall.stl"/>
+      </geometry>
+    </collision>
+    <!-- Part bottom_wide_rail -->
+    <visual>
+      <origin xyz="0 0 0" rpy="0 -0 0"/>
+      <geometry>
+        <mesh filename="package://assets/bottom_wide_rail.stl"/>
+      </geometry>
+      <material name="bottom_wide_rail_material">
+        <color rgba="0.901961 0.901961 0.901961 1"/>
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 -0 0"/>
+      <geometry>
+        <mesh filename="package://assets/bottom_wide_rail.stl"/>
+      </geometry>
+    </collision>
+    <!-- Part base_board -->
+    <visual>
+      <origin xyz="0 0 0" rpy="0 -0 0"/>
+      <geometry>
+        <mesh filename="package://assets/base_board.stl"/>
+      </geometry>
+      <material name="base_board_material">
+        <color rgba="0.65098 0.486275 0.0196078 1"/>
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 -0 0"/>
+      <geometry>
+        <mesh filename="package://assets/base_board.stl"/>
+      </geometry>
+    </collision>
+    <!-- Part rail_6 -->
+    <visual>
+      <origin xyz="0 0 0" rpy="0 -0 0"/>
+      <geometry>
+        <mesh filename="package://assets/rail__6.stl"/>
+      </geometry>
+      <material name="rail_6_material">
+        <color rgba="0.901961 0.901961 0.901961 1"/>
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 -0 0"/>
+      <geometry>
+        <mesh filename="package://assets/rail__6.stl"/>
+      </geometry>
+    </collision>
+    <!-- Part rail_7 -->
+    <visual>
+      <origin xyz="0 0 0" rpy="0 -0 0"/>
+      <geometry>
+        <mesh filename="package://assets/rail__7.stl"/>
+      </geometry>
+      <material name="rail_7_material">
+        <color rgba="0.901961 0.901961 0.901961 1"/>
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 -0 0"/>
+      <geometry>
+        <mesh filename="package://assets/rail__7.stl"/>
+      </geometry>
+    </collision>
+    <!-- Part bottom_down_rail -->
+    <visual>
+      <origin xyz="0 0 0" rpy="0 -0 0"/>
+      <geometry>
+        <mesh filename="package://assets/bottom_down_rail.stl"/>
+      </geometry>
+      <material name="bottom_down_rail_material">
+        <color rgba="0.901961 0.901961 0.901961 1"/>
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 -0 0"/>
+      <geometry>
+        <mesh filename="package://assets/bottom_down_rail.stl"/>
+      </geometry>
+    </collision>
+    <!-- Part rib1 -->
+    <visual>
+      <origin xyz="0 0 0" rpy="0 -0 0"/>
+      <geometry>
+        <mesh filename="package://assets/rib1.stl"/>
+      </geometry>
+      <material name="rib1_material">
+        <color rgba="0.65098 0.486275 0.0196078 1"/>
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 -0 0"/>
+      <geometry>
+        <mesh filename="package://assets/rib1.stl"/>
+      </geometry>
+    </collision>
+    <!-- Part rib2 -->
+    <visual>
+      <origin xyz="0 0 0" rpy="0 -0 0"/>
+      <geometry>
+        <mesh filename="package://assets/rib2.stl"/>
+      </geometry>
+      <material name="rib2_material">
+        <color rgba="0.65098 0.486275 0.0196078 1"/>
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 -0 0"/>
+      <geometry>
+        <mesh filename="package://assets/rib2.stl"/>
+      </geometry>
+    </collision>
+    <!-- Part rib2_2 -->
+    <visual>
+      <origin xyz="0 0 0" rpy="0 -0 0"/>
+      <geometry>
+        <mesh filename="package://assets/rib2__2.stl"/>
+      </geometry>
+      <material name="rib2_2_material">
+        <color rgba="0.65098 0.486275 0.0196078 1"/>
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 -0 0"/>
+      <geometry>
+        <mesh filename="package://assets/rib2__2.stl"/>
+      </geometry>
+    </collision>
+    <!-- Part rib1_2 -->
+    <visual>
+      <origin xyz="0 0 0" rpy="0 -0 0"/>
+      <geometry>
+        <mesh filename="package://assets/rib1__2.stl"/>
+      </geometry>
+      <material name="rib1_2_material">
+        <color rgba="0.65098 0.486275 0.0196078 1"/>
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 -0 0"/>
+      <geometry>
+        <mesh filename="package://assets/rib1__2.stl"/>
+      </geometry>
+    </collision>
+    <!-- Part bottom_ball_return_rail -->
+    <visual>
+      <origin xyz="0 0 0" rpy="0 -0 0"/>
+      <geometry>
+        <mesh filename="package://assets/bottom_ball_return_rail.stl"/>
+      </geometry>
+      <material name="bottom_ball_return_rail_material">
+        <color rgba="0.901961 0.901961 0.901961 1"/>
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 -0 0"/>
+      <geometry>
+        <mesh filename="package://assets/bottom_ball_return_rail.stl"/>
+      </geometry>
+    </collision>
+    <!-- Part ball_return_short_slant_wood -->
+    <visual>
+      <origin xyz="0 0 0" rpy="0 -0 0"/>
+      <geometry>
+        <mesh filename="package://assets/ball_return_short_slant_wood.stl"/>
+      </geometry>
+      <material name="ball_return_short_slant_wood_material">
+        <color rgba="0.65098 0.486275 0.0196078 1"/>
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 -0 0"/>
+      <geometry>
+        <mesh filename="package://assets/ball_return_short_slant_wood.stl"/>
+      </geometry>
+    </collision>
+    <!-- Part other_linear_rod -->
+    <visual>
+      <origin xyz="0 0 0" rpy="0 -0 0"/>
+      <geometry>
+        <mesh filename="package://assets/other_linear_rod.stl"/>
+      </geometry>
+      <material name="other_linear_rod_material">
+        <color rgba="0.647059 0.647059 0.647059 1"/>
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 -0 0"/>
+      <geometry>
+        <mesh filename="package://assets/other_linear_rod.stl"/>
+      </geometry>
+    </collision>
+    <!-- Part other_angle_wall_ball_catch -->
+    <visual>
+      <origin xyz="0 0 0" rpy="0 -0 0"/>
+      <geometry>
+        <mesh filename="package://assets/other_angle_wall_ball_catch.stl"/>
+      </geometry>
+      <material name="other_angle_wall_ball_catch_material">
+        <color rgba="0.498039 0.498039 0.498039 1"/>
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 -0 0"/>
+      <geometry>
+        <mesh filename="package://assets/other_angle_wall_ball_catch.stl"/>
+      </geometry>
+    </collision>
+    <!-- Part middle_ball_return_rail_2 -->
+    <visual>
+      <origin xyz="0 0 0" rpy="0 -0 0"/>
+      <geometry>
+        <mesh filename="package://assets/middle_ball_return_rail__2.stl"/>
+      </geometry>
+      <material name="middle_ball_return_rail_2_material">
+        <color rgba="0.901961 0.901961 0.901961 1"/>
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 -0 0"/>
+      <geometry>
+        <mesh filename="package://assets/middle_ball_return_rail__2.stl"/>
+      </geometry>
+    </collision>
+    <!-- Part ball_return_slant_wood -->
+    <visual>
+      <origin xyz="0 0 0" rpy="0 -0 0"/>
+      <geometry>
+        <mesh filename="package://assets/ball_return_slant_wood.stl"/>
+      </geometry>
+      <material name="ball_return_slant_wood_material">
+        <color rgba="0.65098 0.486275 0.0196078 1"/>
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 -0 0"/>
+      <geometry>
+        <mesh filename="package://assets/ball_return_slant_wood.stl"/>
+      </geometry>
+    </collision>
+    <!-- Part other_short_angled_ball_return -->
+    <visual>
+      <origin xyz="0 0 0" rpy="0 -0 0"/>
+      <geometry>
+        <mesh filename="package://assets/other_short_angled_ball_return.stl"/>
+      </geometry>
+      <material name="other_short_angled_ball_return_material">
+        <color rgba="0.65098 0.486275 0.0196078 1"/>
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 -0 0"/>
+      <geometry>
+        <mesh filename="package://assets/other_short_angled_ball_return.stl"/>
+      </geometry>
+    </collision>
+    <!-- Part rib3_2 -->
+    <visual>
+      <origin xyz="0 0 0" rpy="0 -0 0"/>
+      <geometry>
+        <mesh filename="package://assets/rib3__2.stl"/>
+      </geometry>
+      <material name="rib3_2_material">
+        <color rgba="0.65098 0.486275 0.0196078 1"/>
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 -0 0"/>
+      <geometry>
+        <mesh filename="package://assets/rib3__2.stl"/>
+      </geometry>
+    </collision>
+    <!-- Part rib4_2 -->
+    <visual>
+      <origin xyz="0 0 0" rpy="0 -0 0"/>
+      <geometry>
+        <mesh filename="package://assets/rib4__2.stl"/>
+      </geometry>
+      <material name="rib4_2_material">
+        <color rgba="0.65098 0.486275 0.0196078 1"/>
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="0 -0 0"/>
+      <geometry>
+        <mesh filename="package://assets/rib4__2.stl"/>
+      </geometry>
+    </collision>
+  </link>
+  <!-- Link gear_rod -->
+  <link name="gear_rod">
+    <inertial>
+      <origin xyz="0.0329514 -0.0823027 -1.0226e-12" rpy="0 0 0"/>
+      <mass value="1.61912"/>
+      <inertia ixx="0.023996" ixy="-0.00233582" ixz="5.89651e-14" iyy="0.0237724" iyz="8.14593e-14" izz="0.00900981"/>
+    </inertial>
+    <!-- Part spur_gear__25_teeth -->
+    <visual>
+      <origin xyz="0.663 0.106396 -2.77556e-17" rpy="1.5708 -0 0"/>
+      <geometry>
+        <mesh filename="package://assets/spur_gear__25_teeth.stl"/>
+      </geometry>
+      <material name="spur_gear__25_teeth_material">
+        <color rgba="0.301961 0.301961 0.301961 1"/>
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0.663 0.106396 -2.77556e-17" rpy="1.5708 -0 0"/>
+      <geometry>
+        <mesh filename="package://assets/spur_gear__25_teeth.stl"/>
+      </geometry>
+    </collision>
+    <!-- Part left_spinner_handle -->
+    <visual>
+      <origin xyz="0.663 0.106396 -2.77556e-17" rpy="1.5708 -0 0"/>
+      <geometry>
+        <mesh filename="package://assets/left_spinner_handle.stl"/>
+      </geometry>
+      <material name="left_spinner_handle_material">
+        <color rgba="0.941176 0.87451 0.678431 1"/>
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0.663 0.106396 -2.77556e-17" rpy="1.5708 -0 0"/>
+      <geometry>
+        <mesh filename="package://assets/left_spinner_handle.stl"/>
+      </geometry>
+    </collision>
+    <!-- Part linear_rod_holder -->
+    <visual>
+      <origin xyz="0.663 0.106396 -2.77556e-17" rpy="1.5708 -0 0"/>
+      <geometry>
+        <mesh filename="package://assets/linear_rod_holder.stl"/>
+      </geometry>
+      <material name="linear_rod_holder_material">
+        <color rgba="0.901961 0.901961 0.901961 1"/>
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0.663 0.106396 -2.77556e-17" rpy="1.5708 -0 0"/>
+      <geometry>
+        <mesh filename="package://assets/linear_rod_holder.stl"/>
+      </geometry>
+    </collision>
+    <!-- Part gear_rod -->
+    <visual>
+      <origin xyz="0.663 0.106396 -2.77556e-17" rpy="1.5708 -0 0"/>
+      <geometry>
+        <mesh filename="package://assets/gear_rod.stl"/>
+      </geometry>
+      <material name="gear_rod_material">
+        <color rgba="0.647059 0.647059 0.647059 1"/>
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0.663 0.106396 -2.77556e-17" rpy="1.5708 -0 0"/>
+      <geometry>
+        <mesh filename="package://assets/gear_rod.stl"/>
+      </geometry>
+    </collision>
+    <!-- Part spur_gear__25_teeth_2 -->
+    <visual>
+      <origin xyz="0.663 0.106396 -2.77556e-17" rpy="1.5708 -0 0"/>
+      <geometry>
+        <mesh filename="package://assets/spur_gear__25_teeth__2.stl"/>
+      </geometry>
+      <material name="spur_gear__25_teeth_2_material">
+        <color rgba="0.301961 0.301961 0.301961 1"/>
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0.663 0.106396 -2.77556e-17" rpy="1.5708 -0 0"/>
+      <geometry>
+        <mesh filename="package://assets/spur_gear__25_teeth__2.stl"/>
+      </geometry>
+    </collision>
+    <!-- Part spur_gear__25_teeth_3 -->
+    <visual>
+      <origin xyz="0.663 0.106396 -2.77556e-17" rpy="1.5708 -0 0"/>
+      <geometry>
+        <mesh filename="package://assets/spur_gear__25_teeth__3.stl"/>
+      </geometry>
+      <material name="spur_gear__25_teeth_3_material">
+        <color rgba="0.301961 0.301961 0.301961 1"/>
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0.663 0.106396 -2.77556e-17" rpy="1.5708 -0 0"/>
+      <geometry>
+        <mesh filename="package://assets/spur_gear__25_teeth__3.stl"/>
+      </geometry>
+    </collision>
+    <!-- Part handle_crossbeam -->
+    <visual>
+      <origin xyz="0.663 0.106396 -2.77556e-17" rpy="1.5708 -0 0"/>
+      <geometry>
+        <mesh filename="package://assets/handle_crossbeam.stl"/>
+      </geometry>
+      <material name="handle_crossbeam_material">
+        <color rgba="0.917647 0.917647 0.917647 1"/>
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0.663 0.106396 -2.77556e-17" rpy="1.5708 -0 0"/>
+      <geometry>
+        <mesh filename="package://assets/handle_crossbeam.stl"/>
+      </geometry>
+    </collision>
+    <!-- Part right_spinner_handle -->
+    <visual>
+      <origin xyz="0.663 0.106396 -2.77556e-17" rpy="1.5708 -0 0"/>
+      <geometry>
+        <mesh filename="package://assets/right_spinner_handle.stl"/>
+      </geometry>
+      <material name="right_spinner_handle_material">
+        <color rgba="0.941176 0.87451 0.678431 1"/>
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0.663 0.106396 -2.77556e-17" rpy="1.5708 -0 0"/>
+      <geometry>
+        <mesh filename="package://assets/right_spinner_handle.stl"/>
+      </geometry>
+    </collision>
+    <!-- Part gear_rod_top -->
+    <visual>
+      <origin xyz="0.663 0.106396 -2.77556e-17" rpy="1.5708 -0 0"/>
+      <geometry>
+        <mesh filename="package://assets/gear_rod_top.stl"/>
+      </geometry>
+      <material name="gear_rod_top_material">
+        <color rgba="0.647059 0.647059 0.647059 1"/>
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="0.663 0.106396 -2.77556e-17" rpy="1.5708 -0 0"/>
+      <geometry>
+        <mesh filename="package://assets/gear_rod_top.stl"/>
+      </geometry>
+    </collision>
+  </link>
+  <!-- Link paddle -->
+  <link name="paddle">
+    <inertial>
+      <origin xyz="0 -7.03367e-19 -0.0624481" rpy="0 0 0"/>
+      <mass value="0.60886"/>
+      <inertia ixx="0.00711965" ixy="-1.24956e-37" ixz="1.91889e-19" iyy="0.00035598" iyz="-9.65649e-37" izz="0.00677382"/>
+    </inertial>
+    <!-- Part paddle -->
+    <visual>
+      <origin xyz="0.507245 3.83404e-66 -0.195903" rpy="1.51593e-34 0.122173 6.74428e-53"/>
+      <geometry>
+        <mesh filename="package://assets/paddle.stl"/>
+      </geometry>
+      <material name="paddle_material">
+        <color rgba="0.301961 0.301961 0.301961 1"/>
+      </material>
+    </visual>
+    <!-- Collision: two bars at y = ±103 mm, each 130×10×80 mm -->
+    <collision>
+      <origin xyz="0.0 0.103 -0.065" rpy="0 0.0 1.57"/>
+      <geometry><box size="0.130 0.010 0.080"/></geometry>
+    </collision>
+    <collision>
+      <origin xyz="0.0 -0.103 -0.065" rpy="0 0.0 1.57"/>
+      <geometry><box size="0.130 0.010 0.080"/></geometry>
+    </collision>
+  </link>
+  <!-- Joint from gear_rod to paddle -->
+  <joint name="paddle" type="revolute">
+    <origin xyz="0.135661 -0.0262285 -2.77556e-17" rpy="1.5708 -0 -0.122173"/>
+    <parent link="gear_rod"/>
+    <child link="paddle"/>
+    <axis xyz="0 0 1"/>
+    <limit effort="10" velocity="10" lower="-3.141592653589793" upper="3.141592653589793"/>
+  </joint>
+  <!-- Joint from angle_wall_ball_catch to gear_rod -->
+  <joint name="handle" type="prismatic">
+    <origin xyz="-0.663 0 0.106396" rpy="-1.5708 -0 0"/>
+    <parent link="angle_wall_ball_catch"/>
+    <child link="gear_rod"/>
+    <axis xyz="0 0 1"/>
+    <limit effort="10" velocity="10" lower="-0.11" upper="0.11"/>
+  </joint>
+  <!-- Link other_ball_handle -->
+  <link name="other_ball_handle">
+    <inertial>
+      <origin xyz="-0.0329514 -0.0823027 1.02253e-12" rpy="0 0 0"/>
+      <mass value="1.61912"/>
+      <inertia ixx="0.023996" ixy="0.00233582" ixz="5.89698e-14" iyy="0.0237724" iyz="-8.14583e-14" izz="0.00900981"/>
+    </inertial>
+    <!-- Part other_linear_rod_holder -->
+    <visual>
+      <origin xyz="-0.663 0.106396 -2.77556e-17" rpy="1.5708 -0 0"/>
+      <geometry>
+        <mesh filename="package://assets/other_linear_rod_holder.stl"/>
+      </geometry>
+      <material name="other_linear_rod_holder_material">
+        <color rgba="0.901961 0.901961 0.901961 1"/>
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="-0.663 0.106396 -2.77556e-17" rpy="1.5708 -0 0"/>
+      <geometry>
+        <mesh filename="package://assets/other_linear_rod_holder.stl"/>
+      </geometry>
+    </collision>
+    <!-- Part spur_gear__25_teeth_4 -->
+    <visual>
+      <origin xyz="-0.663 0.106396 -2.77556e-17" rpy="1.5708 -0 0"/>
+      <geometry>
+        <mesh filename="package://assets/spur_gear__25_teeth__4.stl"/>
+      </geometry>
+      <material name="spur_gear__25_teeth_4_material">
+        <color rgba="0.301961 0.301961 0.301961 1"/>
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="-0.663 0.106396 -2.77556e-17" rpy="1.5708 -0 0"/>
+      <geometry>
+        <mesh filename="package://assets/spur_gear__25_teeth__4.stl"/>
+      </geometry>
+    </collision>
+    <!-- Part other_ball_handle -->
+    <visual>
+      <origin xyz="-0.663 0.106396 -2.77556e-17" rpy="1.5708 -0 0"/>
+      <geometry>
+        <mesh filename="package://assets/other_ball_handle.stl"/>
+      </geometry>
+      <material name="other_ball_handle_material">
+        <color rgba="0.941176 0.87451 0.678431 1"/>
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="-0.663 0.106396 -2.77556e-17" rpy="1.5708 -0 0"/>
+      <geometry>
+        <mesh filename="package://assets/other_ball_handle.stl"/>
+      </geometry>
+    </collision>
+    <!-- Part other_gear_rod_top -->
+    <visual>
+      <origin xyz="-0.663 0.106396 -2.77556e-17" rpy="1.5708 -0 0"/>
+      <geometry>
+        <mesh filename="package://assets/other_gear_rod_top.stl"/>
+      </geometry>
+      <material name="other_gear_rod_top_material">
+        <color rgba="0.647059 0.647059 0.647059 1"/>
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="-0.663 0.106396 -2.77556e-17" rpy="1.5708 -0 0"/>
+      <geometry>
+        <mesh filename="package://assets/other_gear_rod_top.stl"/>
+      </geometry>
+    </collision>
+    <!-- Part other_crossbeam -->
+    <visual>
+      <origin xyz="-0.663 0.106396 -2.77556e-17" rpy="1.5708 -0 0"/>
+      <geometry>
+        <mesh filename="package://assets/other_crossbeam.stl"/>
+      </geometry>
+      <material name="other_crossbeam_material">
+        <color rgba="0.917647 0.917647 0.917647 1"/>
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="-0.663 0.106396 -2.77556e-17" rpy="1.5708 -0 0"/>
+      <geometry>
+        <mesh filename="package://assets/other_crossbeam.stl"/>
+      </geometry>
+    </collision>
+    <!-- Part other_left_ball_handle -->
+    <visual>
+      <origin xyz="-0.663 0.106396 -2.77556e-17" rpy="1.5708 -0 0"/>
+      <geometry>
+        <mesh filename="package://assets/other_left_ball_handle.stl"/>
+      </geometry>
+      <material name="other_left_ball_handle_material">
+        <color rgba="0.941176 0.87451 0.678431 1"/>
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="-0.663 0.106396 -2.77556e-17" rpy="1.5708 -0 0"/>
+      <geometry>
+        <mesh filename="package://assets/other_left_ball_handle.stl"/>
+      </geometry>
+    </collision>
+    <!-- Part spur_gear__25_teeth_5 -->
+    <visual>
+      <origin xyz="-0.663 0.106396 -2.77556e-17" rpy="1.5708 -0 0"/>
+      <geometry>
+        <mesh filename="package://assets/spur_gear__25_teeth__5.stl"/>
+      </geometry>
+      <material name="spur_gear__25_teeth_5_material">
+        <color rgba="0.301961 0.301961 0.301961 1"/>
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="-0.663 0.106396 -2.77556e-17" rpy="1.5708 -0 0"/>
+      <geometry>
+        <mesh filename="package://assets/spur_gear__25_teeth__5.stl"/>
+      </geometry>
+    </collision>
+    <!-- Part other_gear_rod -->
+    <visual>
+      <origin xyz="-0.663 0.106396 -2.77556e-17" rpy="1.5708 -0 0"/>
+      <geometry>
+        <mesh filename="package://assets/other_gear_rod.stl"/>
+      </geometry>
+      <material name="other_gear_rod_material">
+        <color rgba="0.647059 0.647059 0.647059 1"/>
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="-0.663 0.106396 -2.77556e-17" rpy="1.5708 -0 0"/>
+      <geometry>
+        <mesh filename="package://assets/other_gear_rod.stl"/>
+      </geometry>
+    </collision>
+    <!-- Part spur_gear__25_teeth_6 -->
+    <visual>
+      <origin xyz="-0.663 0.106396 -2.77556e-17" rpy="1.5708 -0 0"/>
+      <geometry>
+        <mesh filename="package://assets/spur_gear__25_teeth__6.stl"/>
+      </geometry>
+      <material name="spur_gear__25_teeth_6_material">
+        <color rgba="0.301961 0.301961 0.301961 1"/>
+      </material>
+    </visual>
+    <collision>
+      <origin xyz="-0.663 0.106396 -2.77556e-17" rpy="1.5708 -0 0"/>
+      <geometry>
+        <mesh filename="package://assets/spur_gear__25_teeth__6.stl"/>
+      </geometry>
+    </collision>
+  </link>
+  <!-- Link other_paddle -->
+  <link name="other_paddle">
+    <inertial>
+      <origin xyz="1.11022e-16 -2.32927e-19 -0.0624481" rpy="0 0 0"/>
+      <mass value="0.60886"/>
+      <inertia ixx="0.00711965" ixy="1.24956e-37" ixz="-1.91889e-19" iyy="0.00035598" iyz="-9.65649e-37" izz="0.00677382"/>
+    </inertial>
+    <!-- Part other_paddle -->
+    <visual>
+      <origin xyz="-0.507245 3.83404e-66 -0.195903" rpy="1.51593e-34 -0.122173 -6.74428e-53"/>
+      <geometry>
+        <mesh filename="package://assets/other_paddle.stl"/>
+      </geometry>
+      <material name="other_paddle_material">
+        <color rgba="0.301961 0.301961 0.301961 1"/>
+      </material>
+    </visual>
+    <!-- Collision: two bars at y = ±103 mm, each 130×10×80 mm -->
+    <collision>
+      <origin xyz="-0.0 0.103 -0.065" rpy="0 0.0 1.57"/>
+      <geometry><box size="0.130 0.010 0.080"/></geometry>
+    </collision>
+    <collision>
+      <origin xyz="-0.0 -0.103 -0.065" rpy="0 0.0 1.57"/>
+      <geometry><box size="0.130 0.010 0.080"/></geometry>
+    </collision>
+  </link>
+  <!-- Joint from other_ball_handle to other_paddle -->
+  <joint name="opponent_paddle" type="revolute">
+    <origin xyz="-0.135661 -0.0262285 -2.77556e-17" rpy="1.5708 -0 0.122173"/>
+    <parent link="other_ball_handle"/>
+    <child link="other_paddle"/>
+    <axis xyz="0 0 1"/>
+    <limit effort="10" velocity="10" lower="-3.141592653589793" upper="3.141592653589793"/>
+  </joint>
+  <!-- Joint from angle_wall_ball_catch to other_ball_handle -->
+  <joint name="opponent_handle" type="prismatic">
+    <origin xyz="0.663 0 0.106396" rpy="-1.5708 -0 0"/>
+    <parent link="angle_wall_ball_catch"/>
+    <child link="other_ball_handle"/>
+    <axis xyz="0 0 1"/>
+    <limit effort="10" velocity="10" lower="-0.11" upper="0.11"/>
+  </joint>
+</robot>
