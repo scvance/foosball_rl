@@ -380,7 +380,7 @@ def main():
     # Env params
     parser.add_argument("--policy_hz", type=float, default=200.0)
     parser.add_argument("--sim_hz", type=int, default=1000)
-    parser.add_argument("--max_episode_steps", type=int, default=1000)
+    parser.add_argument("--max_episode_steps", type=int, default=5000)
     parser.add_argument("--serve_side", type=str, default="random")
 
     # Physics
@@ -397,6 +397,7 @@ def main():
     parser.add_argument("--batch_size", type=int, default=256)
     parser.add_argument("--tau", type=float, default=0.005)
     parser.add_argument("--gamma", type=float, default=0.99)
+    parser.add_argument("--ckpt", type=str, default=None, help="Path to checkpoint to load.")
 
     args = parser.parse_args()
 
@@ -426,6 +427,7 @@ def main():
         bounce_prob=args.bounce_prob,
         num_substeps=args.num_substeps,
         real_time_gui=False,
+        spawn_without_velocity=True,
     )
 
     print(f"Creating {args.n_envs} underlying envs ({2*args.n_envs} virtual envs for SB3)...")
@@ -464,21 +466,26 @@ def main():
     print(f"Using device: {device}")
 
     # Create SAC model
-    model = SAC(
-        policy="MlpPolicy",
-        env=train_env,
-        learning_rate=args.learning_rate,
-        buffer_size=args.buffer_size,
-        learning_starts=args.learning_starts,
-        batch_size=args.batch_size,
-        tau=args.tau,
-        gamma=args.gamma,
-        train_freq=1,
-        gradient_steps=1,
-        verbose=0,
-        tensorboard_log=tb_dir,
-        device=device,
-    )
+    if args.ckpt is None:
+        model = SAC(
+            policy="MlpPolicy",
+            env=train_env,
+            learning_rate=args.learning_rate,
+            buffer_size=args.buffer_size,
+            learning_starts=args.learning_starts,
+            batch_size=args.batch_size,
+            tau=args.tau,
+            gamma=args.gamma,
+            train_freq=1,
+            gradient_steps=1,
+            verbose=0,
+            tensorboard_log=tb_dir,
+            device=device,
+        )
+    else:
+        print(f"Loading model from checkpoint: {args.ckpt}...")
+        model = SAC.load(args.ckpt, env=train_env, device=device)
+        print("Model loaded!")
 
     # Callbacks
     checkpoint_cb = CheckpointCallback(

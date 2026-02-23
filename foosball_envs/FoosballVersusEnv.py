@@ -48,9 +48,14 @@ class FoosballVersusEnv(gym.Env):
         # actuator caps (what the policy can request)
         slider_vel_cap_mps: float = 20.0,
         kicker_vel_cap_rads: float = 170.0,
+        # physics tuning
+        ball_restitution: float = 0.4,
+        table_restitution: float = 0.1,        # trimesh floor
+        interior_wall_restitution: float = 0.95, # interior wall colliders
         # GUI pacing
         real_time_gui: bool = True,
         serve_side: str = "random",  # 'home' | 'away' | 'random'
+        spawn_without_velocity: bool = False,
     ):
         super().__init__()
 
@@ -103,9 +108,9 @@ class FoosballVersusEnv(gym.Env):
             use_gui=(render_mode == "human"),
             time_step=self.dt_sim,
             seed=seed,
-            ball_restitution=0.8,
-            table_restitution=0.5,
-            wall_restitution=0.8,
+            ball_restitution=ball_restitution,
+            table_restitution=table_restitution,
+            interior_wall_restitution=interior_wall_restitution,
             add_wall_catchers=False,
             num_substeps=int(num_substeps),
         )
@@ -139,6 +144,8 @@ class FoosballVersusEnv(gym.Env):
         self._table_center_y = float(
             (self.sim.table_min_local[1] + self.sim.table_max_local[1]) / 2.0
         )
+
+        self.spawn_without_velocity = bool(spawn_without_velocity)
 
     # ----------------------------
     # Mirroring helpers for symmetric observations
@@ -180,11 +187,16 @@ class FoosballVersusEnv(gym.Env):
         self.sim.remove_ball()
         self.sim.reset_robot_randomized(self.np_random)
 
-        # spawn a new shot (side configurable for self-play)
         shot_side = self.serve_side
         if shot_side == "random":
             shot_side = "home" if self.np_random.random() < 0.5 else "away"
-        shot_info = self.sim.spawn_shot_random(self.speed_min, self.speed_max, self.bounce_prob, target=shot_side)
+
+        if self.spawn_without_velocity:
+            # spawn a new ball at rest on the given side
+            shot_info = self.sim.spawn_ball_at_side(shot_side)
+        else:
+            # spawn a new shot (side configurable for self-play)
+            shot_info = self.sim.spawn_shot_random(self.speed_min, self.speed_max, self.bounce_prob, target=shot_side)
 
         # init estimator from noisy position
         self._update_estimator(first=True)
@@ -279,12 +291,10 @@ class FoosballVersusEnv(gym.Env):
                 break
             if blocks.get("home", False):
                 block_events["home"] = True
-                terminated = True
                 event = "home_block"
                 break
             if blocks.get("away", False):
                 block_events["away"] = True
-                terminated = True
                 event = "away_block"
                 break
             if out:
@@ -319,9 +329,10 @@ class FoosballVersusEnv(gym.Env):
         ball_pos, ball_vel = self.sim.get_ball_true_local_pos_vel()
         goalie_x = self.sim.goalie_x
         goalie_x_away = self.sim.goalie_x_away
-        min_dist_from_goalie = 0.05 + self.sim.ball_radius
+        max_dist_from_goalie = 0.05 + self.sim.ball_radius
         dist_from_goalie = min(abs(float(ball_pos[0]) - goalie_x), abs(float(ball_pos[0]) - goalie_x_away))
-        return dist_from_goalie < min_dist_from_goalie and float(np.linalg.norm(ball_vel)) < 0.05
+
+        return dist_from_goalie > max_dist_from_goalie and float(np.linalg.norm(ball_vel)) < 0.05
 
     def _sample_noisy_ball_pos_local(self) -> np.ndarray:
         pos_true, _ = self.sim.get_ball_true_local_pos_vel()
@@ -636,37 +647,96 @@ class FoosballVersusEnv(gym.Env):
         return None
 
     def _get_rewards(
-        self, 
-        event: Optional[str], 
+        self,
+        event: Optional[str],
         block_events: Dict[str, bool],
         actions: Dict[str, np.ndarray],
     ) -> Dict[str, float]:
-        """Sparse rewards only: goal allowed = -10, block = +0.5"""
+        """
+        Rewards combining sparse goal signals with dense shaping.
+
+        Components:
+        - Goal scored/allowed: ±5.0
+        - Contact reward: encourages hitting the ball
+        - Ball velocity shaping: encourages pushing ball toward opponent
+        - Tracking reward: rewards positioning to intercept incoming shots
+        - Action penalties: discourages jerky/large movements
+        """
+        ## NOTE TO SELF. PENALIZE STALLS. THEY ARE ACTIVELY SOFTLY TAPPING THE BALL TO THE CORNER TO STALL IT OUT.
+        ## Also maybe reward the ball speed more heavily.
         home = 0.0
         away = 0.0
 
         # Sparse terminal rewards
         if event == "home_goal":
-            home -= 1.0  # Home allowed a goal
+            home -= 10.0  # Home allowed a goal
+            away += 10.0  # Away scored a goal
         elif event == "away_goal":
-            away -= 1.0  # Away allowed a goal
-        
-        # Block rewards
-        if block_events.get("home", False):
-            home += 0.5
-        if block_events.get("away", False):
-            away += 0.5
-            
+            away -= 10.0  # Away allowed a goal
+            home += 10.0  # Home scored a goal
+
         # Out of bounds penalty for both
         if event == "out":
             home -= 0.5
             away -= 0.5
 
+        # --- Contact reward ---
+        # Reward making contact with the ball (encourages active play)
+        contact_reward = 0.5
+        if self.sim.had_contact_with_kicker(self.sim.kicker_idx):
+            home += contact_reward
+        if self.sim.opponent_kicker_idx is not None:
+            if self.sim.had_contact_with_kicker(self.sim.opponent_kicker_idx):
+                away += contact_reward
+
+        # --- Ball velocity shaping ---
+        # Reward ball moving toward opponent's goal
+        # Home defends negative x, away defends positive x
+        ball_vx = float(self._est_vel[0])
+        velocity_shaping_scale = 0.01
+        home += velocity_shaping_scale * ball_vx      # Positive vx = toward away goal
+        away += velocity_shaping_scale * (-ball_vx)   # Negative vx = toward home goal
+
+        # --- Tracking reward ---
+        # Reward positioning to intercept when ball is heading toward your goal
+        tracking_speed_threshold = 1.0  # Only reward tracking if ball speed > this (m/s)
+        tracking_reward_scale = 0.05
+        tracking_distance_max = 0.1  # Max distance (m) to get partial reward
+
+        ball_y = float(self._est_pos[1])
+
+        # Home tracking: reward when ball heading toward home goal (negative vx)
+        if ball_vx < -tracking_speed_threshold:
+            player_home_y = float(self.sim.get_player_center_local()[1])
+            tracking_error = abs(player_home_y - ball_y)
+            # Linear reward: full reward at 0 error, zero at tracking_distance_max
+            home += tracking_reward_scale * max(0.0, 1.0 - tracking_error / tracking_distance_max)
+
+        # Away tracking: reward when ball heading toward away goal (positive vx)
+        if ball_vx > tracking_speed_threshold:
+            player_away = self.sim.get_opponent_player_center_local()
+            if player_away is not None:
+                player_away_y = float(player_away[1])
+                tracking_error = abs(player_away_y - ball_y)
+                away += tracking_reward_scale * max(0.0, 1.0 - tracking_error / tracking_distance_max)
+
         # Slight penalty for large actions to encourage smoother control
         a_home = np.asarray(actions["home"], dtype=np.float32).reshape(-1)
         a_away = np.asarray(actions["away"], dtype=np.float32).reshape(-1)
-        home -= 0.001 * float(np.linalg.norm(a_home))
-        away -= 0.001 * float(np.linalg.norm(a_away))
+        home -= 0.1 * float(np.linalg.norm(a_home[1:]))
+        away -= 0.1 * float(np.linalg.norm(a_away[1:]))
+
+        # Penalty for large position changes (0th action = slider position target)
+        home_pos, _ = self.sim.get_joint_positions_and_vels()
+        slider_home_pos = home_pos[0]
+        slider_home_target = self._interp_to_limits(float(a_home[0]), self.sim.slider_limits)
+        home -= 0.1 * abs(slider_home_target - slider_home_pos)
+
+        away_pos, _ = self.sim.get_opponent_joint_positions_and_vels()
+        if away_pos[0] is not None and self.sim.opponent_slider_limits is not None:
+            slider_away_pos = float(away_pos[0])
+            slider_away_target = self._interp_to_limits(-float(a_away[0]), self.sim.opponent_slider_limits)
+            away -= 0.1 * abs(slider_away_target - slider_away_pos)
 
         return {"home": float(home), "away": float(away)}
 

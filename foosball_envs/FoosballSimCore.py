@@ -52,9 +52,10 @@ class _FoosballSimCore:
         table_mesh_filename: str = "main_body.stl",
         # physics
         num_substeps: int = 8,
-        ball_restitution: float = 0.5,
+        ball_restitution: float = 0.85,
         table_restitution: float = 0.5,
         wall_restitution: float = 0.5,
+        interior_wall_restitution: float = 0.95,
         ball_lateral_friction: float = 0.02,
         wall_lateral_friction: float = 0.02,
         add_wall_catchers: bool = False,
@@ -62,8 +63,8 @@ class _FoosballSimCore:
         kicker_vel_cap: float = 170.0,   # rad/s
         slider_vel_cap: float = 15.0,    # m/s
         # ---- kicker control params ----
-        kicker_holding_torque: float = 50.0,  # Nm - torque to hold position when not spinning
-        kicker_spinning_torque: float = 100.0,  # Nm - torque when actively spinning
+        kicker_holding_torque: float = 10.0,  # Nm - torque to hold position when not spinning
+        kicker_spinning_torque: float = 15.0,  # Nm - torque when actively spinning
     ):
         self.use_gui = use_gui
         self.dt = float(time_step)
@@ -74,6 +75,7 @@ class _FoosballSimCore:
         self.ball_restitution = float(ball_restitution)
         self.table_restitution = float(table_restitution)
         self.wall_restitution = float(wall_restitution)
+        self.interior_wall_restitution = float(interior_wall_restitution)
         self.ball_lateral_friction = float(ball_lateral_friction)
         self.wall_lateral_friction = float(wall_lateral_friction)
         self.add_wall_catchers = bool(add_wall_catchers)
@@ -216,6 +218,11 @@ class _FoosballSimCore:
         self._stopped_steps_home = 0
         self._stopped_steps_away = 0
         self._stopped_steps = 0  # kept for backward compatibility
+
+        # Interior wall colliders (independent restitution from floor/trimesh)
+        self.interior_wall_ids: List[int] = self._add_interior_wall_colliders()
+        self.env_body_ids.extend(self.interior_wall_ids)
+        self._disable_robot_vs_env_collisions(self.interior_wall_ids)
 
         # Optional catcher walls
         self.wall_catcher_ids: List[int] = []
@@ -501,6 +508,123 @@ class _FoosballSimCore:
             )
         return bodies
 
+    def _add_interior_wall_colliders(self) -> List[int]:
+        """
+        Add box colliders for interior walls and floor with exact table dimensions.
+        Only collides with the ball (robot collisions disabled by caller).
+
+        Table: 550 mm (x) × 360 mm (y), centered at origin.
+        Goals: 180 mm wide (y) × 100 mm tall (z), at x = ±225 mm.
+        Floor: 10.1 mm thick, top surface 0.1 mm above trimesh.
+        All walls inset 0.1 mm so ball contacts collider before trimesh.
+        """
+        inset = 0.0001  # 0.1 mm – ensures ball hits collider, not trimesh
+
+        # ---- exact physical dimensions (metres) ----
+        x_half      = 0.275   # 550 mm / 2
+        y_half      = 0.180   # 360 mm / 2
+        goal_x      = 0.275   # end-wall / goal-line x
+        goal_y_half = 0.090   # 180 mm / 2  goal width
+        goal_height = 0.100   # 100 mm
+
+        wall_thickness = 0.010   # 10 mm thick walls
+        wall_height    = 0.120   # 120 mm (goal height + margin)
+        half_wt = 0.5 * wall_thickness
+        half_wh = 0.5 * wall_height
+        z0 = self.play_surface_z_local
+
+        bodies: List[int] = []
+
+        # ---- Side walls (+Y / -Y, full 550 mm length) ----
+        shape_side = p.createCollisionShape(
+            p.GEOM_BOX, halfExtents=[x_half, half_wt, half_wh]
+        )
+        # +Y wall – inner face at y = +y_half - inset
+        bodies.append(self._create_static_box(
+            shape_side, [0.0, (y_half - inset) + half_wt, z0 + half_wh]
+        ))
+        # -Y wall – inner face at y = -y_half + inset
+        bodies.append(self._create_static_box(
+            shape_side, [0.0, -(y_half - inset) - half_wt, z0 + half_wh]
+        ))
+
+        # ---- End walls with goal gaps ----
+        # Home end (-X) – inner face at x = -(goal_x - inset)
+        self._add_end_wall_segments(
+            bodies,
+            x_center=-(goal_x - inset) - half_wt,
+            y_min=-y_half, y_max=y_half,
+            gap_y_min=-goal_y_half, gap_y_max=goal_y_half,
+            half_wt=half_wt, half_wh=half_wh, z0=z0,
+        )
+        # Away end (+X) – inner face at x = +(goal_x - inset)
+        self._add_end_wall_segments(
+            bodies,
+            x_center=(goal_x - inset) + half_wt,
+            y_min=-y_half, y_max=y_half,
+            gap_y_min=-goal_y_half, gap_y_max=goal_y_half,
+            half_wt=half_wt, half_wh=half_wh, z0=z0,
+        )
+
+        # ---- Floor collider (10.1 mm thick) ----
+        floor_thickness = 0.0101   # 0.1 mm thicker than 10 mm physical floor
+        floor_half_t = 0.5 * floor_thickness
+        floor_shape = p.createCollisionShape(
+            p.GEOM_BOX, halfExtents=[x_half, y_half, floor_half_t]
+        )
+        # Top surface 0.1 mm above trimesh so ball sits on this collider
+        floor_top_z = z0 + inset
+        bodies.append(self._create_static_box(
+            floor_shape, [0.0, 0.0, floor_top_z]
+        ))
+
+        # ---- Apply physics ----
+        # Last body is the floor; everything before it is a wall.
+        floor_idx = len(bodies) - 1
+        for i, bid in enumerate(bodies):
+            is_floor = (i == floor_idx)
+            p.changeDynamics(
+                bid, -1,
+                lateralFriction=self.wall_lateral_friction,
+                restitution=self.table_restitution if is_floor else self.interior_wall_restitution,
+                rollingFriction=0.0,
+                spinningFriction=0.0,
+                linearDamping=0.0,
+                angularDamping=0.0,
+            )
+        return bodies
+
+    def _add_end_wall_segments(
+        self,
+        bodies: List[int],
+        x_center: float,
+        y_min: float,
+        y_max: float,
+        gap_y_min: float,
+        gap_y_max: float,
+        half_wt: float,
+        half_wh: float,
+        z0: float,
+    ) -> None:
+        """Add two wall segments for an end wall, leaving a gap for the goal."""
+        # Segment below goal (y_min → gap_y_min)
+        if gap_y_min > y_min:
+            half_y = 0.5 * (gap_y_min - y_min)
+            cy = 0.5 * (y_min + gap_y_min)
+            shape = p.createCollisionShape(
+                p.GEOM_BOX, halfExtents=[half_wt, half_y, half_wh]
+            )
+            bodies.append(self._create_static_box(shape, [x_center, cy, z0 + half_wh]))
+
+        # Segment above goal (gap_y_max → y_max)
+        if y_max > gap_y_max:
+            half_y = 0.5 * (y_max - gap_y_max)
+            cy = 0.5 * (gap_y_max + y_max)
+            shape = p.createCollisionShape(
+                p.GEOM_BOX, halfExtents=[half_wt, half_y, half_wh]
+            )
+            bodies.append(self._create_static_box(shape, [x_center, cy, z0 + half_wh]))
+
     def _create_static_box(self, collision_shape_id: int, pos_local) -> int:
         pos_world = self.table_local_to_world_pos(pos_local)
         bid = p.createMultiBody(
@@ -581,7 +705,7 @@ class _FoosballSimCore:
                 kicker_idx,
                 controlMode=p.POSITION_CONTROL,
                 targetPosition=target_pos,
-                maxVelocity=vel_cap,
+                maxVelocity=self.kicker_vel_cap,
             )
 
     def apply_action_targets(
@@ -723,6 +847,43 @@ class _FoosballSimCore:
     # Ball spawning / shooting
     # ----------------------------
 
+    def spawn_ball_at_side(
+            self,
+            side: str
+    ):
+        """
+        Spawns ball at the specified side without initial velocity. 
+        Spawns at any y inside the table, and at x +- 2cm from the goalie line on the specified side.
+        """
+        self.remove_ball()
+
+        margin = self.ball_radius + 0.02
+        _, y_min, _ = self.table_min_local
+        _, y_max, _ = self.table_max_local
+
+        # y spawn: ensure entire ball fits
+        y_spawn = self.rng.uniform(y_min + margin, y_max - margin)
+        if side.lower() == "home":
+            goalie_x = float(self.goalie_x)
+        else:
+            goalie_x = float(self.goalie_x_away)
+
+        x_spawn = self.rng.uniform(goalie_x - 0.02, goalie_x + 0.02)
+        z_spawn = self.play_surface_z_local + self.ball_radius + 0.001
+        v_local = np.array([0.0, 0.0, 0.0], dtype=np.float32)
+        self._spawn_ball_with_velocity_local(x_spawn, y_spawn, z_spawn, v_local)
+        lpos = self.world_to_table_local_pos(p.getBasePositionAndOrientation(self.ball_id)[0])
+        self._prev_ball_local_pos = (float(lpos[0]), float(lpos[1]), float(lpos[2]))
+
+
+        return {
+            "x_spawn": float(x_spawn),
+            "y_spawn": float(y_spawn),
+            "y_target": float(-100),
+            "speed": float(0.0),
+            "use_bounce": float(-100.0),
+            "target_goal": "NONE",
+        }
 
     def spawn_shot_random(
         self,
@@ -1355,29 +1516,53 @@ class _FoosballSimCore:
         x_goal: float,
         expect_increasing: bool,
     ) -> bool:
-        """Detect crossing of a goal plane in the expected direction."""
+        """
+        Detect crossing of a goal plane in the expected direction.
+        
+        Uses generous bounds to avoid missing goals:
+        - 20% extra margin on Y bounds
+        - Ball within 0.05m of goal plane on correct side counts
+        """
+        x_proximity = 0.05  # Ball within 5cm of goal plane can count
+        
+        # Check if ball crossed OR is close enough on the correct side
         if expect_increasing:
-            if not (x0 < x_goal and x1 >= x_goal):
+            # Ball moving right toward away goal (positive x)
+            crossed = (x0 < x_goal and x1 >= x_goal)
+            near_goal = (x1 >= x_goal - x_proximity) and (x1 <= x_goal + x_proximity)
+            past_goal = (x1 > x_goal)  # Ball went past the goal line
+            if not (crossed or (near_goal and past_goal)):
                 return False
         else:
-            if not (x0 > x_goal and x1 <= x_goal):
+            # Ball moving left toward home goal (negative x)
+            crossed = (x0 > x_goal and x1 <= x_goal)
+            near_goal = (x1 <= x_goal + x_proximity) and (x1 >= x_goal - x_proximity)
+            past_goal = (x1 < x_goal)  # Ball went past the goal line
+            if not (crossed or (near_goal and past_goal)):
                 return False
 
         dx = x1 - x0
         if abs(dx) < 1e-12:
-            return False
+            # No x movement - use current position for y/z check
+            t = 0.0
+            y_hit = y1
+            z_hit = z1
+        else:
+            t = (x_goal - x0) / dx
+            # Clamp t to [0, 1] for interpolation, but still allow the goal
+            t_clamped = max(0.0, min(1.0, t))
+            y_hit = y0 + t_clamped * (y1 - y0)
+            z_hit = z0 + t_clamped * (z1 - z0)
 
-        t = (x_goal - x0) / dx
-        if t < 0.0 or t > 1.0:
-            return False
-
-        y_hit = y0 + t * (y1 - y0)
-        z_hit = z0 + t * (z1 - z0)
-
-        y_min = float(self.goal_rect_y_min + self.ball_radius)
-        y_max = float(self.goal_rect_y_max - self.ball_radius)
-        z_min = float(self.goal_rect_z_min + self.ball_radius)
-        z_max = float(self.goal_rect_z_max - self.ball_radius)
+        # 20% extra margin on Y bounds
+        y_range = self.goal_rect_y_max - self.goal_rect_y_min
+        y_margin = y_range * 0.20
+        y_min = float(self.goal_rect_y_min) - y_margin
+        y_max = float(self.goal_rect_y_max) + y_margin
+        
+        # Keep Z bounds as-is (floor to reasonable height)
+        z_min = float(self.goal_rect_z_min)
+        z_max = float(self.goal_rect_z_max)
 
         return (y_min <= y_hit <= y_max) and (z_min <= z_hit <= z_max)
 
