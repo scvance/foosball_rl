@@ -846,12 +846,12 @@
     </collision>
   </link>
   <!-- Joint from gear_rod to paddle -->
-  <joint name="paddle" type="revolute">
+  <joint name="paddle" type="continuous">
     <origin xyz="0.135661 -0.0262285 -2.77556e-17" rpy="1.5708 -0 -0.122173"/>
     <parent link="gear_rod"/>
     <child link="paddle"/>
     <axis xyz="0 0 1"/>
-    <limit effort="10" velocity="10" lower="-3.141592653589793" upper="3.141592653589793"/>
+    <limit effort="10" velocity="10"/>
   </joint>
   <!-- Joint from angle_wall_ball_catch to gear_rod -->
   <joint name="handle" type="prismatic">
@@ -1041,12 +1041,12 @@
     </collision>
   </link>
   <!-- Joint from other_ball_handle to other_paddle -->
-  <joint name="opponent_paddle" type="revolute">
+  <joint name="opponent_paddle" type="continuous">
     <origin xyz="-0.135661 -0.0262285 -2.77556e-17" rpy="1.5708 -0 0.122173"/>
     <parent link="other_ball_handle"/>
     <child link="other_paddle"/>
     <axis xyz="0 0 1"/>
-    <limit effort="10" velocity="10" lower="-3.141592653589793" upper="3.141592653589793"/>
+    <limit effort="10" velocity="10"/>
   </joint>
   <!-- Joint from angle_wall_ball_catch to other_ball_handle -->
   <joint name="opponent_handle" type="prismatic">

@@ -5,9 +5,9 @@
 # Robot: onshape_robot/shootout_robot/shootout_robot.urdf
 # Joints:
 #   - handle         (prismatic ±0.11 m):  home player lateral position
-#   - paddle         (revolute, continuous): home player paddle rotation
+#   - paddle         (continuous): home player paddle rotation
 #   - opponent_handle (prismatic ±0.11 m): away player lateral position
-#   - opponent_paddle (revolute, continuous): away player paddle rotation
+#   - opponent_paddle (continuous): away player paddle rotation
 #
 # Table geometry (table-local frame, metres):
 #   X: goal planes at x = ±0.610  (entire back wall is the goal)
@@ -166,7 +166,7 @@ class _ShootoutSimCore:
             else None
         )
 
-        # Paddle joints are revolute ±π but treated as fully continuous.
+        # Paddle joints are URDF-continuous and treated as fully continuous.
         self.paddle_is_continuous = True
         self.opponent_paddle_is_continuous = True
 
