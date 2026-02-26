@@ -14,6 +14,7 @@ import time
 from stable_baselines3 import SAC
 
 from foosball_envs.ShootoutVersusEnv import ShootoutVersusEnv
+from train_scripts.train_shootout_versus import ScriptedPolicy
 
 
 def parse_args() -> argparse.Namespace:
@@ -22,10 +23,17 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--episodes", type=int, default=10)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--deterministic", action="store_true", help="Use deterministic policy actions")
+    parser.add_argument(
+        "--opponent",
+        type=str,
+        default=None,
+        help="Away opponent: 'scripted' for rule-based, path to a .zip for a different model, "
+             "or omit to use the same policy for both sides (self-play).",
+    )
 
     # Keep these aligned with training defaults unless you intentionally change them.
-    parser.add_argument("--policy_hz", type=float, default=30.0)
-    parser.add_argument("--sim_hz", type=int, default=240)
+    parser.add_argument("--policy_hz", type=float, default=200.0)
+    parser.add_argument("--sim_hz", type=int, default=1000)
     parser.add_argument("--max_episode_steps", type=int, default=200)
     parser.add_argument(
         "--serve_mode",
@@ -64,6 +72,16 @@ def main() -> None:
 
     model = SAC.load(args.model_path, device="auto")
 
+    if args.opponent is None:
+        away_model = model
+        print("Opponent: self (same policy both sides)")
+    elif args.opponent == "scripted":
+        away_model = ScriptedPolicy(n_envs=1)
+        print("Opponent: scripted rule-based policy")
+    else:
+        away_model = SAC.load(args.opponent, device="auto")
+        print(f"Opponent: {args.opponent}")
+
     try:
         for ep in range(1, args.episodes + 1):
             obs, info = env.reset()
@@ -72,9 +90,12 @@ def main() -> None:
             ep_away_reward = 0.0
             steps = 0
 
+            if hasattr(away_model, "on_episode_start"):
+                away_model.on_episode_start(0)
+
             while not done:
                 home_action, _ = model.predict(obs["home"], deterministic=args.deterministic)
-                away_action, _ = model.predict(obs["away"], deterministic=args.deterministic)
+                away_action, _ = away_model.predict(obs["away"], deterministic=args.deterministic)
 
                 obs, rewards, terminated, truncated, info = env.step(
                     {"home": home_action, "away": away_action}

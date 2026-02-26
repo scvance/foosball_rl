@@ -14,7 +14,8 @@ Observation per side: 21 dims
 
 MIRRORING FOR SINGLE-POLICY TRAINING:
   - 'away' obs are flipped so both sides see the table from the same perspective.
-  - 'away' actions are un-mirrored: handle_pos and paddle_vel are negated.
+  - 'away' actions are un-mirrored:
+      handle_pos is negated, handle_vel is unchanged, paddle_vel is unchanged.
   - A single policy trained with self-play can play either side.
 """
 
@@ -40,8 +41,8 @@ class ShootoutVersusEnv(gym.Env):
         self,
         render_mode: str = "none",
         # control rates
-        policy_hz: float = 30.0,
-        sim_hz: int = 240,
+        policy_hz: float = 200.0,
+        sim_hz: int = 1000,
         max_episode_steps: int = 200,
         seed: Optional[int] = None,
         # spawn
@@ -51,6 +52,10 @@ class ShootoutVersusEnv(gym.Env):
         # actuator caps
         handle_vel_cap_mps: float = 10.0,
         paddle_vel_cap_rads: float = 20.0,
+        paddle_cmd_deadzone: float = 0.1,
+        paddle_cmd_delta_penalty: float = 0.02,
+        paddle_cmd_flip_penalty: float = 0.02,
+        paddle_cmd_flip_threshold: float = 0.25,
         # physics
         ball_restitution: float = 0.30,
         wall_restitution: float = 0.85,
@@ -78,6 +83,12 @@ class ShootoutVersusEnv(gym.Env):
         self.cam_noise_std = np.array(cam_noise_std, dtype=np.float32)
         self.handle_vel_cap_mps = float(handle_vel_cap_mps)
         self.paddle_vel_cap_rads = float(paddle_vel_cap_rads)
+        self.paddle_cmd_deadzone = float(max(0.0, paddle_cmd_deadzone))
+        self.paddle_cmd_delta_penalty = float(max(0.0, paddle_cmd_delta_penalty))
+        self.paddle_cmd_flip_penalty = float(max(0.0, paddle_cmd_flip_penalty))
+        self.paddle_cmd_flip_threshold = float(
+            max(0.0, min(1.0, paddle_cmd_flip_threshold))
+        )
         self.real_time_gui = bool(real_time_gui)
 
         # Action: [handle_pos, handle_vel, paddle_vel] in [-1, 1]
@@ -108,6 +119,7 @@ class ShootoutVersusEnv(gym.Env):
         # Episode bookkeeping
         self._episode_step = 0
         self._terminated_event: Optional[str] = None
+        self._prev_paddle_cmd = {"home": 0.0, "away": 0.0}
 
         if self.sim.opponent_handle_idx is None or self.sim.opponent_paddle_idx is None:
             raise RuntimeError(
@@ -136,6 +148,7 @@ class ShootoutVersusEnv(gym.Env):
 
         self._episode_step = 0
         self._terminated_event = None
+        self._prev_paddle_cmd = {"home": 0.0, "away": 0.0}
 
         self.sim.remove_ball()
         self.sim.reset_robot_randomized()
@@ -166,19 +179,31 @@ class ShootoutVersusEnv(gym.Env):
         h_hv = float(np.clip(a_home[1], -1.0, 1.0))
         h_pv = float(np.clip(a_home[2], -1.0, 1.0))
 
+        # dead zone for paddle velocity commands: if paddle command is very low, treat as zero to avoid jitter around vel targets
+        if abs(h_pv) < self.paddle_cmd_deadzone:
+            h_pv = 0.0
+            # nullify the action command so that the agent doesn't get penalised for small joystick noise when they intend to keep the paddle still
+            action["home"][2] = 0.0
+
         home_handle_target = self._interp_to_limits(h_hp, self.sim.handle_limits)
         home_handle_vel_cap = (h_hv + 1.0) * 0.5 * self.handle_vel_cap_mps
         home_paddle_vel = h_pv * self.paddle_vel_cap_rads
 
         # ── Away action (un-mirror) ──────────────────────────────────────────
-        # Policy output is "as if playing home"; negate handle_pos and paddle_vel
+        # Handle pos is negated (y-axis mirrored). Paddle vel is NOT negated —
+        # both joints share the same sign convention (negative = forward kick).
         a_hp = float(np.clip(a_away[0], -1.0, 1.0))
         a_hv = float(np.clip(a_away[1], -1.0, 1.0))
         a_pv = float(np.clip(a_away[2], -1.0, 1.0))
 
+        # dead zone for paddle velocity commands: if paddle command is very low, treat as zero to avoid jitter around vel targets
+        if abs(a_pv) < self.paddle_cmd_deadzone:
+            a_pv = 0.0
+            action["away"][2] = 0.0
+
         away_handle_target = self._interp_to_limits(-a_hp, self.sim.opponent_handle_limits)
         away_handle_vel_cap = (a_hv + 1.0) * 0.5 * self.handle_vel_cap_mps
-        away_paddle_vel = -a_pv * self.paddle_vel_cap_rads
+        away_paddle_vel = a_pv * self.paddle_vel_cap_rads
 
         self.sim.apply_action_targets_dual(
             home_handle_target, home_paddle_vel,
@@ -408,18 +433,21 @@ class ShootoutVersusEnv(gym.Env):
             intercept = self._predict_goal_intercept_est("home")
             y_i, z_i, x_i, t_i = intercept if intercept else (0.0, 0.0, 0.0, 0.0)
         else:
-            # Mirror: flip sign of handle_pos and paddle_vel so away looks like home
+            # Mirror: flip sign of handle_pos/vel (handles slide along the same +y axis,
+            # so y must be negated). Paddle angle and paddle vel are NOT negated — both
+            # joints share the same sign convention (negative = forward kick), confirmed
+            # by the URDF joint axes (axis xyz="0 0 1", rpy="1.5708 0 ±0.122").
             own = np.array([
-                self._wrap_pi(-(k_away or 0.0)),
-                -(h_away or 0.0),
-                -(vk_away or 0.0),
-                -(vh_away or 0.0),
+                self._wrap_pi(k_away or 0.0),    # paddle angle: same convention
+                -(h_away or 0.0),                 # handle pos:   negate (y mirrored)
+                vk_away or 0.0,                   # paddle vel:   same convention
+                -(vh_away or 0.0),                # handle vel:   negate (y mirrored)
             ], dtype=np.float32)
             opp = np.array([
-                self._wrap_pi(-k_home),
-                -h_home,
-                -vk_home,
-                -vh_home,
+                self._wrap_pi(k_home),   # paddle angle: same convention
+                -h_home,                 # handle pos:   negate
+                vk_home,                 # paddle vel:   same convention
+                -vh_home,                # handle vel:   negate
             ], dtype=np.float32)
             est_pos = self._mirror_position(self._est_pos)
             est_vel = self._mirror_velocity(self._est_vel)
@@ -473,30 +501,47 @@ class ShootoutVersusEnv(gym.Env):
 
         # Ball velocity shaping: reward pushing ball toward opponent's goal
         vx = float(self._est_vel[0])
-        home += 0.01 * vx    # positive vx = toward away goal (+x)
-        away += 0.01 * (-vx) # negative vx = toward home goal (−x)
-
-        # Tracking: reward when ball heads toward your goal and you're aligned
-        ball_y = float(self._est_pos[1])
-        tracking_scale = 0.05
-        tracking_max = 0.10
-
-        if vx < -1.0:  # ball heading toward home
-            p_home = self.sim.get_player_center_local()
-            err = abs(float(p_home[1]) - ball_y)
-            home += tracking_scale * max(0.0, 1.0 - err / tracking_max)
-
-        if vx > 1.0:  # ball heading toward away
-            p_away = self.sim.get_opponent_player_center_local()
-            if p_away is not None:
-                err = abs(float(p_away[1]) - ball_y)
-                away += tracking_scale * max(0.0, 1.0 - err / tracking_max)
+        if vx > 0.0:
+            home += 0.1 * vx    # positive vx = toward away goal (+x)
+        else:
+            away += 0.1 * (-vx) # negative vx = toward home goal (−x)
 
         # Action penalty
         a_h = np.asarray(actions["home"], dtype=np.float32)
         a_a = np.asarray(actions["away"], dtype=np.float32)
         home -= 0.05 * float(np.linalg.norm(a_h[1:]))  # penalise vel/spin commands
         away -= 0.05 * float(np.linalg.norm(a_a[1:]))
+
+        # Oscillation penalty on paddle velocity command.
+        # Penalize rapid command changes and explicit sign flips.
+        h_cmd = float(np.clip(a_h[2], -1.0, 1.0))
+        a_cmd = float(np.clip(a_a[2], -1.0, 1.0))
+        if abs(h_cmd) < self.paddle_cmd_deadzone:
+            h_cmd = 0.0
+        if abs(a_cmd) < self.paddle_cmd_deadzone:
+            a_cmd = 0.0
+
+        h_prev = float(self._prev_paddle_cmd["home"])
+        a_prev = float(self._prev_paddle_cmd["away"])
+
+        home -= self.paddle_cmd_delta_penalty * abs(h_cmd - h_prev)
+        away -= self.paddle_cmd_delta_penalty * abs(a_cmd - a_prev)
+
+        h_flip = (h_prev * h_cmd < 0.0) and (
+            abs(h_prev) > self.paddle_cmd_flip_threshold
+            and abs(h_cmd) > self.paddle_cmd_flip_threshold
+        )
+        a_flip = (a_prev * a_cmd < 0.0) and (
+            abs(a_prev) > self.paddle_cmd_flip_threshold
+            and abs(a_cmd) > self.paddle_cmd_flip_threshold
+        )
+        if h_flip:
+            home -= self.paddle_cmd_flip_penalty
+        if a_flip:
+            away -= self.paddle_cmd_flip_penalty
+
+        self._prev_paddle_cmd["home"] = h_cmd
+        self._prev_paddle_cmd["away"] = a_cmd
 
         return {"home": float(home), "away": float(away)}
 
