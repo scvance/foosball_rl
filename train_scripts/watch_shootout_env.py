@@ -121,8 +121,8 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--max_episode_steps", type=int, default=200)
     p.add_argument("--serve_mode", type=str, default="random",
                    choices=["random_fire", "corner", "random"])
-    p.add_argument("--handle_vel_cap_mps", type=float, default=10.0)
-    p.add_argument("--paddle_vel_cap_rads", type=float, default=20.0)
+    p.add_argument("--handle_vel_cap_mps", type=float, default=17.0)
+    p.add_argument("--paddle_vel_cap_rads", type=float, default=125.66370614359172)
     p.add_argument("--ball_restitution", type=float, default=0.30)
     p.add_argument("--wall_restitution", type=float, default=0.85)
     p.add_argument("--paddle_restitution", type=float, default=0.85)
@@ -164,17 +164,22 @@ def main() -> None:
     sim = env.sim
     reward_text_home_id = None
     reward_text_away_id = None
+    ball_speed_text_id = None
     z_text = float(sim.floor_z_edge + 0.05)  # right above the table near the goal lines
     home_anchor_world = sim.table_local_to_world_pos([-sim.goal_x, 0.0, z_text])
     away_anchor_world = sim.table_local_to_world_pos([sim.goal_x, 0.0, z_text])
+    center_anchor_world = sim.table_local_to_world_pos([0.0, 0.0, float(sim.floor_z_center + 0.06)])
 
     def update_reward_overlay(step_home: float, step_away: float, ret_home: float, ret_away: float) -> None:
-        nonlocal reward_text_home_id, reward_text_away_id
+        nonlocal reward_text_home_id, reward_text_away_id, ball_speed_text_id
         if args.no_reward_overlay:
             return
 
         home_text = f"home r={step_home:+.3f}\\nR={ret_home:+.3f}"
         away_text = f"away r={step_away:+.3f}\\nR={ret_away:+.3f}"
+        _, ball_vel = sim.get_ball_true_local_pos_vel()
+        ball_speed = float(np.linalg.norm(ball_vel))
+        speed_text = f"|v|={ball_speed:.2f} m/s"
 
         kwargs_home = {}
         kwargs_away = {}
@@ -198,6 +203,17 @@ def main() -> None:
             textSize=1.1,
             lifeTime=0,
             **kwargs_away,
+        )
+        kwargs_speed = {}
+        if ball_speed_text_id is not None:
+            kwargs_speed["replaceItemUniqueId"] = ball_speed_text_id
+        ball_speed_text_id = p.addUserDebugText(
+            speed_text,
+            center_anchor_world,
+            textColorRGB=[0.90, 0.90, 0.25],
+            textSize=1.2,
+            lifeTime=0,
+            **kwargs_speed,
         )
 
     try:

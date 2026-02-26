@@ -68,11 +68,11 @@ class _ShootoutSimCore:
         ball_linear_damping: float = 0.01,
         ball_angular_damping: float = 0.01,
         # ---- velocity caps ----
-        handle_vel_cap: float = 10.0,   # m/s
-        paddle_vel_cap: float = 20.0,   # rad/s
+        handle_vel_cap: float = 17.0,   # m/s
+        paddle_vel_cap: float = 40.0 * math.pi,   # rad/s (20 rev/s)
         # ---- paddle torques ----
-        paddle_holding_torque: float = 10.0,   # Nm — hold when near-zero velocity
-        paddle_spinning_torque: float = 15.0,  # Nm — active spin
+        paddle_holding_torque: float = 0.5,   # Nm — hold when near-zero velocity
+        paddle_spinning_torque: float = 0.5,  # Nm — active spin
     ):
         self.use_gui = use_gui
         self.dt = float(time_step)

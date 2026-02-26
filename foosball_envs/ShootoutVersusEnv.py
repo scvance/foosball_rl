@@ -50,10 +50,9 @@ class ShootoutVersusEnv(gym.Env):
         # camera noise
         cam_noise_std: Tuple[float, float, float] = (0.002, 0.002, 0.002),
         # actuator caps
-        handle_vel_cap_mps: float = 10.0,
-        paddle_vel_cap_rads: float = 20.0,
+        handle_vel_cap_mps: float = 17.0,
+        paddle_vel_cap_rads: float = 40.0 * math.pi,  # 20 rev/s
         paddle_cmd_deadzone: float = 0.1,
-        paddle_cmd_delta_penalty: float = 0.02,
         paddle_cmd_flip_penalty: float = 0.02,
         paddle_cmd_flip_threshold: float = 0.25,
         # physics
@@ -84,7 +83,6 @@ class ShootoutVersusEnv(gym.Env):
         self.handle_vel_cap_mps = float(handle_vel_cap_mps)
         self.paddle_vel_cap_rads = float(paddle_vel_cap_rads)
         self.paddle_cmd_deadzone = float(max(0.0, paddle_cmd_deadzone))
-        self.paddle_cmd_delta_penalty = float(max(0.0, paddle_cmd_delta_penalty))
         self.paddle_cmd_flip_penalty = float(max(0.0, paddle_cmd_flip_penalty))
         self.paddle_cmd_flip_threshold = float(
             max(0.0, min(1.0, paddle_cmd_flip_threshold))
@@ -104,6 +102,8 @@ class ShootoutVersusEnv(gym.Env):
             time_step=self.dt_sim,
             seed=seed,
             num_substeps=num_substeps,
+            handle_vel_cap=self.handle_vel_cap_mps,
+            paddle_vel_cap=self.paddle_vel_cap_rads,
             ball_restitution=ball_restitution,
             wall_restitution=wall_restitution,
             paddle_restitution=paddle_restitution,
@@ -512,8 +512,7 @@ class ShootoutVersusEnv(gym.Env):
         home -= 0.05 * float(np.linalg.norm(a_h[1:]))  # penalise vel/spin commands
         away -= 0.05 * float(np.linalg.norm(a_a[1:]))
 
-        # Oscillation penalty on paddle velocity command.
-        # Penalize rapid command changes and explicit sign flips.
+        # Explicit oscillation penalty on paddle velocity command via sign flips.
         h_cmd = float(np.clip(a_h[2], -1.0, 1.0))
         a_cmd = float(np.clip(a_a[2], -1.0, 1.0))
         if abs(h_cmd) < self.paddle_cmd_deadzone:
@@ -523,9 +522,6 @@ class ShootoutVersusEnv(gym.Env):
 
         h_prev = float(self._prev_paddle_cmd["home"])
         a_prev = float(self._prev_paddle_cmd["away"])
-
-        home -= self.paddle_cmd_delta_penalty * abs(h_cmd - h_prev)
-        away -= self.paddle_cmd_delta_penalty * abs(a_cmd - a_prev)
 
         h_flip = (h_prev * h_cmd < 0.0) and (
             abs(h_prev) > self.paddle_cmd_flip_threshold

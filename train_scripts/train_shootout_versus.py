@@ -580,8 +580,8 @@ def main():
     parser.add_argument("--max_episode_steps",   type=int,   default=200)
     parser.add_argument("--serve_mode",          type=str,   default="random",
                         choices=["random_fire", "corner", "random"])
-    parser.add_argument("--handle_vel_cap_mps",  type=float, default=10.0)
-    parser.add_argument("--paddle_vel_cap_rads", type=float, default=20.0)
+    parser.add_argument("--handle_vel_cap_mps",  type=float, default=17.0)
+    parser.add_argument("--paddle_vel_cap_rads", type=float, default=125.66370614359172)
 
     # Physics
     parser.add_argument("--ball_restitution",    type=float, default=0.30)

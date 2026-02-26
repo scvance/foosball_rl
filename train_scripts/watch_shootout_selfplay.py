@@ -41,8 +41,8 @@ def parse_args() -> argparse.Namespace:
         default="random",
         choices=["random_fire", "corner", "random"],
     )
-    parser.add_argument("--handle_vel_cap_mps", type=float, default=10.0)
-    parser.add_argument("--paddle_vel_cap_rads", type=float, default=20.0)
+    parser.add_argument("--handle_vel_cap_mps", type=float, default=17.0)
+    parser.add_argument("--paddle_vel_cap_rads", type=float, default=125.66370614359172)
     parser.add_argument("--ball_restitution", type=float, default=0.30)
     parser.add_argument("--wall_restitution", type=float, default=0.85)
     parser.add_argument("--paddle_restitution", type=float, default=0.85)
