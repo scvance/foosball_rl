@@ -59,7 +59,7 @@ class ShootoutVersusEnv(gym.Env):
         ball_restitution: float = 0.30,
         wall_restitution: float = 0.85,
         paddle_restitution: float = 0.85,
-        num_substeps: int = 1,
+        num_substeps: int = 8,
         # pacing
         real_time_gui: bool = True,
     ):

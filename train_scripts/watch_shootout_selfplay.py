@@ -33,7 +33,7 @@ def parse_args() -> argparse.Namespace:
 
     # Keep these aligned with training defaults unless you intentionally change them.
     parser.add_argument("--policy_hz", type=float, default=200.0)
-    parser.add_argument("--sim_hz", type=int, default=1000)
+    parser.add_argument("--sim_hz", type=int, default=2000)
     parser.add_argument("--max_episode_steps", type=int, default=200)
     parser.add_argument(
         "--serve_mode",
@@ -42,11 +42,11 @@ def parse_args() -> argparse.Namespace:
         choices=["random_fire", "corner", "random"],
     )
     parser.add_argument("--handle_vel_cap_mps", type=float, default=17.0)
-    parser.add_argument("--paddle_vel_cap_rads", type=float, default=125.66370614359172)
+    parser.add_argument("--paddle_vel_cap_rads", type=float, default=40)  # ~6-7 rev/s
     parser.add_argument("--ball_restitution", type=float, default=0.30)
     parser.add_argument("--wall_restitution", type=float, default=0.85)
     parser.add_argument("--paddle_restitution", type=float, default=0.85)
-    parser.add_argument("--num_substeps", type=int, default=1)
+    parser.add_argument("--num_substeps", type=int, default=8)
 
     return parser.parse_args()
 

@@ -20,6 +20,7 @@ Self-play with one model:
 
 import argparse
 import time
+from pathlib import Path
 from typing import Any, Dict
 
 import numpy as np
@@ -111,22 +112,33 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--deterministic", action="store_true",
                    help="Use deterministic actions for SAC policies")
+    p.add_argument("--headless", action="store_true",
+                   help="Run without GUI.")
+    p.add_argument("--record", type=str, default=None,
+                   help="Path to output MP4 video recorded from the configured camera.")
 
     p.add_argument("--verify_mirroring", action="store_true",
                    help="Print observation-mirroring residuals each episode")
 
     # Keep aligned with training defaults unless intentionally changed.
-    p.add_argument("--policy_hz", type=float, default=30.0)
-    p.add_argument("--sim_hz", type=int, default=240)
-    p.add_argument("--max_episode_steps", type=int, default=200)
+    p.add_argument("--policy_hz", type=float, default=200.0)
+    p.add_argument("--sim_hz", type=int, default=1000)
+    p.add_argument("--max_episode_steps", type=int, default=2000)
     p.add_argument("--serve_mode", type=str, default="random",
                    choices=["random_fire", "corner", "random"])
     p.add_argument("--handle_vel_cap_mps", type=float, default=17.0)
-    p.add_argument("--paddle_vel_cap_rads", type=float, default=125.66370614359172)
+    p.add_argument("--paddle_vel_cap_rads", type=float, default=40)
     p.add_argument("--ball_restitution", type=float, default=0.30)
     p.add_argument("--wall_restitution", type=float, default=0.85)
     p.add_argument("--paddle_restitution", type=float, default=0.85)
     p.add_argument("--num_substeps", type=int, default=1)
+    p.add_argument("--camera_distance", type=float, default=0.85)
+    p.add_argument("--camera_yaw", type=float, default=90.0)
+    p.add_argument("--camera_pitch", type=float, default=-33.0)
+    p.add_argument("--camera_fov", type=float, default=60.0)
+    p.add_argument("--record_width", type=int, default=1280)
+    p.add_argument("--record_height", type=int, default=720)
+    p.add_argument("--record_fps", type=int, default=100)
     p.add_argument(
         "--no_reward_overlay",
         action="store_true",
@@ -140,7 +152,7 @@ def main() -> None:
     args = parse_args()
 
     env = ShootoutVersusEnv(
-        render_mode="human",
+        render_mode="none" if args.headless else "human",
         policy_hz=args.policy_hz,
         sim_hz=args.sim_hz,
         max_episode_steps=args.max_episode_steps,
@@ -152,7 +164,7 @@ def main() -> None:
         wall_restitution=args.wall_restitution,
         paddle_restitution=args.paddle_restitution,
         num_substeps=args.num_substeps,
-        real_time_gui=True,
+        real_time_gui=(not args.headless),
     )
 
     home_policy = _make_policy(args.home)
@@ -162,6 +174,61 @@ def main() -> None:
     print(f"Away policy: {args.away}")
 
     sim = env.sim
+    camera_target_world = sim.table_local_to_world_pos([0.0, 0.0, float(sim.floor_z_center)])
+    if not args.headless:
+        p.resetDebugVisualizerCamera(
+            cameraDistance=float(args.camera_distance),
+            cameraYaw=float(args.camera_yaw),
+            cameraPitch=float(args.camera_pitch),
+            cameraTargetPosition=camera_target_world,
+            physicsClientId=sim.client,
+        )
+
+    view_matrix = p.computeViewMatrixFromYawPitchRoll(
+        cameraTargetPosition=camera_target_world,
+        distance=float(args.camera_distance),
+        yaw=float(args.camera_yaw),
+        pitch=float(args.camera_pitch),
+        roll=0.0,
+        upAxisIndex=2,
+    )
+    projection_matrix = p.computeProjectionMatrixFOV(
+        fov=float(args.camera_fov),
+        aspect=float(args.record_width) / float(args.record_height),
+        nearVal=0.02,
+        farVal=5.0,
+    )
+
+    video_writer = None
+    if args.record:
+        try:
+            import imageio.v2 as imageio
+        except Exception as exc:
+            raise RuntimeError(
+                "--record requires imageio (`pip install imageio imageio-ffmpeg`)."
+            ) from exc
+        out_path = Path(args.record).expanduser().resolve()
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        video_writer = imageio.get_writer(str(out_path), fps=int(args.record_fps))
+        print(f"Recording video to: {out_path}")
+
+    def write_video_frame() -> None:
+        if video_writer is None:
+            return
+        renderer = p.ER_TINY_RENDERER if args.headless else p.ER_BULLET_HARDWARE_OPENGL
+        _, _, rgba, _, _ = p.getCameraImage(
+            width=int(args.record_width),
+            height=int(args.record_height),
+            viewMatrix=view_matrix,
+            projectionMatrix=projection_matrix,
+            renderer=renderer,
+            physicsClientId=sim.client,
+        )
+        frame = np.asarray(rgba, dtype=np.uint8).reshape(
+            int(args.record_height), int(args.record_width), 4
+        )[:, :, :3]
+        video_writer.append_data(frame)
+
     reward_text_home_id = None
     reward_text_away_id = None
     ball_speed_text_id = None
@@ -219,6 +286,7 @@ def main() -> None:
     try:
         for ep in range(1, args.episodes + 1):
             obs, info = env.reset()
+            write_video_frame()
             done = False
             steps = 0
             home_ret = 0.0
@@ -256,6 +324,7 @@ def main() -> None:
                     home_ret,
                     away_ret,
                 )
+                write_video_frame()
                 steps += 1
                 done = bool(terminated or truncated)
 
@@ -272,6 +341,8 @@ def main() -> None:
 
             time.sleep(0.25)
     finally:
+        if video_writer is not None:
+            video_writer.close()
         env.close()
 
 
