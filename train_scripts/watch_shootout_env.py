@@ -66,6 +66,19 @@ def _obs_mirror_error(obs: Dict[str, np.ndarray]) -> np.ndarray:
     a = obs["away"]
 
     exp = np.zeros_like(h)
+    n = int(h.shape[0])
+    if n == 21:
+        own_dim = 4
+        own_h_start = 9
+        opp_h_start = 13
+        int_start = 17
+    elif n == 23:
+        own_dim = 5
+        own_h_start = 9
+        opp_h_start = 14
+        int_start = 19
+    else:
+        raise ValueError(f"Unsupported observation length for mirror check: {n}")
 
     # Ball est pos/vel/pred (x,y mirrored; z unchanged)
     exp[0] = -h[0]
@@ -81,22 +94,37 @@ def _obs_mirror_error(obs: Dict[str, np.ndarray]) -> np.ndarray:
     exp[8] = h[8]
 
     # own (away) from home's opp, and opp (home) from home's own
-    # Layout: [paddle_ang, handle_pos, paddle_vel, handle_vel]
-    exp[9] = h[13]
-    exp[10] = -h[14]
-    exp[11] = h[15]
-    exp[12] = -h[16]
+    # 21-dim: [angle, handle_pos, paddle_vel, handle_vel]
+    # 23-dim: [sin(angle), cos(angle), handle_pos, paddle_vel, handle_vel]
+    if own_dim == 4:
+        exp[own_h_start] = h[opp_h_start]
+        exp[own_h_start + 1] = -h[opp_h_start + 1]
+        exp[own_h_start + 2] = h[opp_h_start + 2]
+        exp[own_h_start + 3] = -h[opp_h_start + 3]
 
-    exp[13] = h[9]
-    exp[14] = -h[10]
-    exp[15] = h[11]
-    exp[16] = -h[12]
+        exp[opp_h_start] = h[own_h_start]
+        exp[opp_h_start + 1] = -h[own_h_start + 1]
+        exp[opp_h_start + 2] = h[own_h_start + 2]
+        exp[opp_h_start + 3] = -h[own_h_start + 3]
+    else:
+        # sin/cos unchanged under away/home perspective transform here
+        exp[own_h_start] = h[opp_h_start]
+        exp[own_h_start + 1] = h[opp_h_start + 1]
+        exp[own_h_start + 2] = -h[opp_h_start + 2]
+        exp[own_h_start + 3] = h[opp_h_start + 3]
+        exp[own_h_start + 4] = -h[opp_h_start + 4]
+
+        exp[opp_h_start] = h[own_h_start]
+        exp[opp_h_start + 1] = h[own_h_start + 1]
+        exp[opp_h_start + 2] = -h[own_h_start + 2]
+        exp[opp_h_start + 3] = h[own_h_start + 3]
+        exp[opp_h_start + 4] = -h[own_h_start + 4]
 
     # Intercept [y, z, x_plane, t]
-    exp[17] = -h[17]
-    exp[18] = h[18]
-    exp[19] = -h[19]
-    exp[20] = h[20]
+    exp[int_start] = -h[int_start]
+    exp[int_start + 1] = h[int_start + 1]
+    exp[int_start + 2] = -h[int_start + 2]
+    exp[int_start + 3] = h[int_start + 3]
 
     return np.abs(a - exp)
 
@@ -128,6 +156,13 @@ def parse_args() -> argparse.Namespace:
                    choices=["random_fire", "corner", "random"])
     p.add_argument("--handle_vel_cap_mps", type=float, default=17.0)
     p.add_argument("--paddle_vel_cap_rads", type=float, default=40)
+    p.add_argument(
+        "--paddle_angle_obs_mode",
+        type=str,
+        default="sincos",
+        choices=["wrapped", "continuous", "sincos"],
+        help="Must match the mode used during training for loaded models.",
+    )
     p.add_argument("--ball_restitution", type=float, default=0.30)
     p.add_argument("--wall_restitution", type=float, default=0.85)
     p.add_argument("--paddle_restitution", type=float, default=0.85)
@@ -138,7 +173,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--camera_fov", type=float, default=60.0)
     p.add_argument("--record_width", type=int, default=1280)
     p.add_argument("--record_height", type=int, default=720)
-    p.add_argument("--record_fps", type=int, default=100)
+    p.add_argument("--record_fps", type=int, default=30)
     p.add_argument(
         "--no_reward_overlay",
         action="store_true",
@@ -160,6 +195,7 @@ def main() -> None:
         serve_mode=args.serve_mode,
         handle_vel_cap_mps=args.handle_vel_cap_mps,
         paddle_vel_cap_rads=args.paddle_vel_cap_rads,
+        paddle_angle_obs_mode=args.paddle_angle_obs_mode,
         ball_restitution=args.ball_restitution,
         wall_restitution=args.wall_restitution,
         paddle_restitution=args.paddle_restitution,

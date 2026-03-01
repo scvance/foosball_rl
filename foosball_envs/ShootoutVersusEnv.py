@@ -4,18 +4,21 @@ ShootoutVersusEnv.py
 Two-player self-play environment for the Shootout robot.
 Mirrors the FoosballVersusEnv pattern exactly.
 
-Action per side: [handle_pos, handle_vel, paddle_vel]  in [-1, 1]
-  - handle_pos : maps to handle joint limits (lateral position)
+Action per side: [handle_delta, handle_vel, paddle_vel]  in [-1, 1]
+  - handle_delta : per-step lateral displacement command (delta target)
   - handle_vel : maps to [0, handle_vel_cap] (speed cap for position control)
   - paddle_vel : maps to [-paddle_vel_cap, +paddle_vel_cap] (angular velocity)
 
-Observation per side: 21 dims
-  ball est pos/vel/pred (9) + own joints (4) + opp joints (4) + intercept (4)
+Observation per side:
+  - 21 dims when paddle_angle_obs_mode in {"wrapped", "continuous"}
+      ball est pos/vel/pred (9) + own joints (4) + opp joints (4) + intercept (4)
+  - 23 dims when paddle_angle_obs_mode == "sincos"
+      ball est pos/vel/pred (9) + own joints (5) + opp joints (5) + intercept (4)
 
 MIRRORING FOR SINGLE-POLICY TRAINING:
   - 'away' obs are flipped so both sides see the table from the same perspective.
   - 'away' actions are un-mirrored:
-      handle_pos is negated, handle_vel is unchanged, paddle_vel is unchanged.
+      handle_delta is negated, handle_vel is unchanged, paddle_vel is unchanged.
   - A single policy trained with self-play can play either side.
 """
 
@@ -43,7 +46,7 @@ class ShootoutVersusEnv(gym.Env):
         # control rates
         policy_hz: float = 200.0,
         sim_hz: int = 1000,
-        max_episode_steps: int = 200,
+        max_episode_steps: int = 2000,
         seed: Optional[int] = None,
         # spawn
         serve_mode: str = "random_fire",  # 'random_fire' | 'corner' | 'random'
@@ -51,15 +54,30 @@ class ShootoutVersusEnv(gym.Env):
         cam_noise_std: Tuple[float, float, float] = (0.002, 0.002, 0.002),
         # actuator caps
         handle_vel_cap_mps: float = 17.0,
+        handle_delta_max_m: float = 0.085,
+        handle_delta_deadzone: float = 0.05,
         paddle_vel_cap_rads: float = 40.0 * math.pi,  # 20 rev/s
-        paddle_cmd_deadzone: float = 0.1,
+        paddle_cmd_deadzone: float = 0.05,
         paddle_cmd_flip_penalty: float = 0.02,
-        paddle_cmd_flip_threshold: float = 0.25,
+        paddle_cmd_flip_threshold: float = 0.35,
+        # reward shaping scales
+        terminal_goal_reward: float = 10.0,
+        out_penalty: float = 0.5,
+        contact_bonus: float = 0.01,
+        toward_goal_vx_reward: float = 0.1,
+        away_goal_vx_penalty: float = 0.02,
+        action_vel_penalty: float = 0.02,
+        action_handle_penalty: float = 0.02,
+        # paddle-angle observation encoding:
+        #   'wrapped'    -> angle wrapped to [-pi, pi] (legacy)
+        #   'continuous' -> unbounded angle (good for debugging continuity)
+        #   'sincos'     -> [sin(angle), cos(angle)] (recommended for policy training)
+        paddle_angle_obs_mode: str = "sincos",
         # physics
         ball_restitution: float = 0.30,
         wall_restitution: float = 0.85,
         paddle_restitution: float = 0.85,
-        num_substeps: int = 8,
+        num_substeps: int = 1,
         # pacing
         real_time_gui: bool = True,
     ):
@@ -81,20 +99,35 @@ class ShootoutVersusEnv(gym.Env):
         self.max_episode_steps = int(max_episode_steps)
         self.cam_noise_std = np.array(cam_noise_std, dtype=np.float32)
         self.handle_vel_cap_mps = float(handle_vel_cap_mps)
+        self.handle_delta_max_m = float(max(0.0, handle_delta_max_m))
+        self.handle_delta_deadzone = float(max(0.0, min(1.0, handle_delta_deadzone)))
         self.paddle_vel_cap_rads = float(paddle_vel_cap_rads)
         self.paddle_cmd_deadzone = float(max(0.0, paddle_cmd_deadzone))
         self.paddle_cmd_flip_penalty = float(max(0.0, paddle_cmd_flip_penalty))
         self.paddle_cmd_flip_threshold = float(
             max(0.0, min(1.0, paddle_cmd_flip_threshold))
         )
+        self.terminal_goal_reward = float(max(0.0, terminal_goal_reward))
+        self.out_penalty = float(max(0.0, out_penalty))
+        self.contact_bonus = float(max(0.0, contact_bonus))
+        self.toward_goal_vx_reward = float(max(0.0, toward_goal_vx_reward))
+        self.away_goal_vx_penalty = float(max(0.0, away_goal_vx_penalty))
+        self.action_vel_penalty = float(max(0.0, action_vel_penalty))
+        self.action_handle_penalty = float(max(0.0, action_handle_penalty))
         self.real_time_gui = bool(real_time_gui)
+        if paddle_angle_obs_mode not in ("wrapped", "continuous", "sincos"):
+            raise ValueError(
+                "paddle_angle_obs_mode must be one of: 'wrapped', 'continuous', 'sincos'"
+            )
+        self.paddle_angle_obs_mode = paddle_angle_obs_mode
 
-        # Action: [handle_pos, handle_vel, paddle_vel] in [-1, 1]
+        # Action: [handle_delta, handle_vel, paddle_vel] in [-1, 1]
         act_box = spaces.Box(low=-1.0, high=1.0, shape=(3,), dtype=np.float32)
         self.action_space = spaces.Dict({"home": act_box, "away": act_box})
 
-        # Observation: 21 dims
-        obs_box = spaces.Box(low=-np.inf, high=np.inf, shape=(21,), dtype=np.float32)
+        # Observation shape depends on paddle-angle encoding mode.
+        obs_dim = 23 if self.paddle_angle_obs_mode == "sincos" else 21
+        obs_box = spaces.Box(low=-np.inf, high=np.inf, shape=(obs_dim,), dtype=np.float32)
         self.observation_space = spaces.Dict({"home": obs_box, "away": obs_box})
 
         self.sim = _ShootoutSimCore(
@@ -175,9 +208,11 @@ class ShootoutVersusEnv(gym.Env):
         self._episode_step += 1
 
         # ── Home action ─────────────────────────────────────────────────────
-        h_hp = float(np.clip(a_home[0], -1.0, 1.0))
+        h_hd = float(np.clip(a_home[0], -1.0, 1.0))
         h_hv = float(np.clip(a_home[1], -1.0, 1.0))
         h_pv = float(np.clip(a_home[2], -1.0, 1.0))
+        if abs(h_hd) < self.handle_delta_deadzone:
+            h_hd = 0.0
 
         # dead zone for paddle velocity commands: if paddle command is very low, treat as zero to avoid jitter around vel targets
         if abs(h_pv) < self.paddle_cmd_deadzone:
@@ -185,23 +220,33 @@ class ShootoutVersusEnv(gym.Env):
             # nullify the action command so that the agent doesn't get penalised for small joystick noise when they intend to keep the paddle still
             action["home"][2] = 0.0
 
-        home_handle_target = self._interp_to_limits(h_hp, self.sim.handle_limits)
+        h_curr, _ = self.sim.get_joint_positions()
+        home_handle_target = self._clamp_to_limits(
+            h_curr + h_hd * self.handle_delta_max_m,
+            self.sim.handle_limits,
+        )
         home_handle_vel_cap = (h_hv + 1.0) * 0.5 * self.handle_vel_cap_mps
         home_paddle_vel = h_pv * self.paddle_vel_cap_rads
 
         # ── Away action (un-mirror) ──────────────────────────────────────────
-        # Handle pos is negated (y-axis mirrored). Paddle vel is NOT negated —
+        # Handle delta is negated (y-axis mirrored). Paddle vel is NOT negated —
         # both joints share the same sign convention (negative = forward kick).
-        a_hp = float(np.clip(a_away[0], -1.0, 1.0))
+        a_hd = float(np.clip(a_away[0], -1.0, 1.0))
         a_hv = float(np.clip(a_away[1], -1.0, 1.0))
         a_pv = float(np.clip(a_away[2], -1.0, 1.0))
+        if abs(a_hd) < self.handle_delta_deadzone:
+            a_hd = 0.0
 
         # dead zone for paddle velocity commands: if paddle command is very low, treat as zero to avoid jitter around vel targets
         if abs(a_pv) < self.paddle_cmd_deadzone:
             a_pv = 0.0
             action["away"][2] = 0.0
 
-        away_handle_target = self._interp_to_limits(-a_hp, self.sim.opponent_handle_limits)
+        a_curr, _ = self.sim.get_opponent_joint_positions()
+        away_handle_target = self._clamp_to_limits(
+            a_curr - a_hd * self.handle_delta_max_m,
+            self.sim.opponent_handle_limits,
+        )
         away_handle_vel_cap = (a_hv + 1.0) * 0.5 * self.handle_vel_cap_mps
         away_paddle_vel = a_pv * self.paddle_vel_cap_rads
 
@@ -377,10 +422,6 @@ class ShootoutVersusEnv(gym.Env):
 
         self._pred_pos = (self._est_pos + self._est_vel * self.dt_eff).astype(np.float32)
 
-    @staticmethod
-    def _wrap_pi(angle: float) -> float:
-        return ((angle + math.pi) % (2.0 * math.pi)) - math.pi
-
     def _predict_goal_intercept_est(self, side: str) -> Optional[Tuple[float, float, float, float]]:
         if self.sim.ball_id is None:
             return None
@@ -419,14 +460,28 @@ class ShootoutVersusEnv(gym.Env):
         (h_home, k_home), (vh_home, vk_home) = self.sim.get_joint_positions_and_vels()
         (h_away, k_away), (vh_away, vk_away) = self.sim.get_opponent_joint_positions_and_vels()
 
+        def _angle_features(angle: float) -> np.ndarray:
+            if self.paddle_angle_obs_mode == "wrapped":
+                wrapped = ((float(angle) + math.pi) % (2.0 * math.pi)) - math.pi
+                return np.array([wrapped], dtype=np.float32)
+            if self.paddle_angle_obs_mode == "sincos":
+                a = float(angle)
+                return np.array([math.sin(a), math.cos(a)], dtype=np.float32)
+            return np.array([float(angle)], dtype=np.float32)
+
         if side == "home":
-            own = np.array([self._wrap_pi(k_home), h_home, vk_home, vh_home], dtype=np.float32)
-            opp = np.array([
-                self._wrap_pi(k_away) if k_away is not None else 0.0,
-                h_away if h_away is not None else 0.0,
-                vk_away if vk_away is not None else 0.0,
-                vh_away if vh_away is not None else 0.0,
-            ], dtype=np.float32)
+            own = np.concatenate([
+                _angle_features(k_home),
+                np.array([h_home, vk_home, vh_home], dtype=np.float32),
+            ]).astype(np.float32)
+            opp = np.concatenate([
+                _angle_features(k_away if k_away is not None else 0.0),
+                np.array([
+                    h_away if h_away is not None else 0.0,
+                    vk_away if vk_away is not None else 0.0,
+                    vh_away if vh_away is not None else 0.0,
+                ], dtype=np.float32),
+            ]).astype(np.float32)
             est_pos = self._est_pos.copy()
             est_vel = self._est_vel.copy()
             pred_pos = self._pred_pos.copy()
@@ -437,18 +492,22 @@ class ShootoutVersusEnv(gym.Env):
             # so y must be negated). Paddle angle and paddle vel are NOT negated — both
             # joints share the same sign convention (negative = forward kick), confirmed
             # by the URDF joint axes (axis xyz="0 0 1", rpy="1.5708 0 ±0.122").
-            own = np.array([
-                self._wrap_pi(k_away or 0.0),    # paddle angle: same convention
-                -(h_away or 0.0),                 # handle pos:   negate (y mirrored)
-                vk_away or 0.0,                   # paddle vel:   same convention
-                -(vh_away or 0.0),                # handle vel:   negate (y mirrored)
-            ], dtype=np.float32)
-            opp = np.array([
-                self._wrap_pi(k_home),   # paddle angle: same convention
-                -h_home,                 # handle pos:   negate
-                vk_home,                 # paddle vel:   same convention
-                -vh_home,                # handle vel:   negate
-            ], dtype=np.float32)
+            own = np.concatenate([
+                _angle_features(k_away or 0.0),  # paddle angle: same convention
+                np.array([
+                    -(h_away or 0.0),            # handle pos:   negate (y mirrored)
+                    vk_away or 0.0,              # paddle vel:   same convention
+                    -(vh_away or 0.0),           # handle vel:   negate (y mirrored)
+                ], dtype=np.float32),
+            ]).astype(np.float32)
+            opp = np.concatenate([
+                _angle_features(k_home),          # paddle angle: same convention
+                np.array([
+                    -h_home,                      # handle pos:   negate
+                    vk_home,                      # paddle vel:   same convention
+                    -vh_home,                     # handle vel:   negate
+                ], dtype=np.float32),
+            ]).astype(np.float32)
             est_pos = self._mirror_position(self._est_pos)
             est_vel = self._mirror_velocity(self._est_vel)
             pred_pos = self._mirror_position(self._pred_pos)
@@ -484,33 +543,37 @@ class ShootoutVersusEnv(gym.Env):
 
         # Sparse terminal
         if event == "home_goal":
-            home -= 10.0
-            away += 10.0
+            home -= self.terminal_goal_reward
+            away += self.terminal_goal_reward
         elif event == "away_goal":
-            away -= 10.0
-            home += 10.0
+            away -= self.terminal_goal_reward
+            home += self.terminal_goal_reward
         elif event == "out":
-            home -= 0.5
-            away -= 0.5
+            home -= self.out_penalty
+            away -= self.out_penalty
 
         # Contact
         if self.sim.had_contact_with_paddle(self.sim.paddle_idx):
-            home += 0.1
+            home += self.contact_bonus
         if self.sim.had_contact_with_paddle(self.sim.opponent_paddle_idx):
-            away += 0.1
+            away += self.contact_bonus
 
         # Ball velocity shaping: reward pushing ball toward opponent's goal
         vx = float(self._est_vel[0])
         if vx > 0.0:
-            home += 0.1 * vx    # positive vx = toward away goal (+x)
+            home += self.toward_goal_vx_reward * vx   # positive vx = toward away goal (+x)
+            away += self.away_goal_vx_penalty * (-vx)
         else:
-            away += 0.1 * (-vx) # negative vx = toward home goal (−x)
+            home += self.away_goal_vx_penalty * vx
+            away += self.toward_goal_vx_reward * (-vx)
 
         # Action penalty
         a_h = np.asarray(actions["home"], dtype=np.float32)
         a_a = np.asarray(actions["away"], dtype=np.float32)
-        home -= 0.05 * float(np.linalg.norm(a_h[1:]))  # penalise vel/spin commands
-        away -= 0.05 * float(np.linalg.norm(a_a[1:]))
+        home -= self.action_vel_penalty * float(np.linalg.norm(a_h[1:]))
+        away -= self.action_vel_penalty * float(np.linalg.norm(a_a[1:]))
+        home -= self.action_handle_penalty * float(abs(a_h[0]))
+        away -= self.action_handle_penalty * float(abs(a_a[0]))
 
         # Explicit oscillation penalty on paddle velocity command via sign flips.
         h_cmd = float(np.clip(a_h[2], -1.0, 1.0))
@@ -561,9 +624,9 @@ class ShootoutVersusEnv(gym.Env):
 
     # ── Helpers ───────────────────────────────────────────────────────────────
 
-    def _interp_to_limits(self, a_norm: float, limits) -> float:
-        a = float(np.clip(a_norm, -1.0, 1.0))
-        return limits.lower + (a + 1.0) * 0.5 * (limits.upper - limits.lower)
+    @staticmethod
+    def _clamp_to_limits(value: float, limits) -> float:
+        return float(max(limits.lower, min(limits.upper, value)))
 
     def close(self):
         self.sim.close()

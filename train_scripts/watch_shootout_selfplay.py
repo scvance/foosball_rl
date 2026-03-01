@@ -43,6 +43,13 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--handle_vel_cap_mps", type=float, default=17.0)
     parser.add_argument("--paddle_vel_cap_rads", type=float, default=40)  # ~6-7 rev/s
+    parser.add_argument(
+        "--paddle_angle_obs_mode",
+        type=str,
+        default="sincos",
+        choices=["wrapped", "continuous", "sincos"],
+        help="Must match the mode used during training for loaded models.",
+    )
     parser.add_argument("--ball_restitution", type=float, default=0.30)
     parser.add_argument("--wall_restitution", type=float, default=0.85)
     parser.add_argument("--paddle_restitution", type=float, default=0.85)
@@ -63,6 +70,7 @@ def main() -> None:
         serve_mode=args.serve_mode,
         handle_vel_cap_mps=args.handle_vel_cap_mps,
         paddle_vel_cap_rads=args.paddle_vel_cap_rads,
+        paddle_angle_obs_mode=args.paddle_angle_obs_mode,
         ball_restitution=args.ball_restitution,
         wall_restitution=args.wall_restitution,
         paddle_restitution=args.paddle_restitution,

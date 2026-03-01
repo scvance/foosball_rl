@@ -46,19 +46,19 @@ class ScriptedPolicy:
     """
     Rule-based opponent. Pure numpy, SB3-compatible predict() interface.
 
-    Obs layout (21 dims, always in home frame):
-      [0:3]  ball est pos  (x, y, z)   — x<0 = near home side
-      [3:6]  ball est vel  (vx, vy, vz)
-      [6:9]  ball pred pos
-      [9]    own paddle angle (wrapped)
-      [10]   own handle pos  (metres, ±0.11)
-      [11]   own paddle vel
-      [12]   own handle vel
-      [13:17] opp joints (same structure)
-      [17]   intercept_y
-      [18]   intercept_z
-      [19]   intercept_x_plane
-      [20]   intercept_time
+    Obs layout (always in home frame):
+      21-dim mode ("wrapped"/"continuous"):
+        [0:3]  ball est pos  (x, y, z)
+        [3:6]  ball est vel  (vx, vy, vz)
+        [6:9]  ball pred pos
+        [9:13]   own joints  [angle, handle_pos, paddle_vel, handle_vel]
+        [13:17]  opp joints  [angle, handle_pos, paddle_vel, handle_vel]
+        [17:21]  intercept   [y, z, x_plane, t]
+
+      23-dim mode ("sincos"):
+        [9:14]   own joints  [sin(angle), cos(angle), handle_pos, paddle_vel, handle_vel]
+        [14:19]  opp joints  [sin(angle), cos(angle), handle_pos, paddle_vel, handle_vel]
+        [19:23]  intercept   [y, z, x_plane, t]
 
     The paddle has a GAP at its centre; two bars sit at ±0.103 m from the
     handle/paddle link origin. The handle must be OFFSET so one bar aligns with
@@ -72,7 +72,9 @@ class ScriptedPolicy:
     """
 
     BAR_OFFSET = 0.103   # m from handle/paddle link origin to each bar
-    HANDLE_MAX  = 0.11   # m
+    HANDLE_MAX = 0.11    # m
+    HANDLE_DELTA_MAX = 0.085
+    HANDLE_DELTA_DEADZONE = 0.05
 
     def __init__(self, n_envs: int = 1):
         self.n_envs = n_envs
@@ -83,7 +85,7 @@ class ScriptedPolicy:
 
     def predict(self, obs: np.ndarray, state=None, episode_start=None, deterministic=False):
         """
-        obs: (n_envs, 21) or (21,)
+        obs: (n_envs, 21|23) or (21|23,)
         returns: (actions, None)  — actions shape (n_envs, 3) or (3,)
         """
         single = obs.ndim == 1
@@ -95,10 +97,22 @@ class ScriptedPolicy:
 
         for i in range(n):
             o = obs[i]
+            if o.shape[0] == 21:
+                own_handle_idx = 10
+                intercept_y_idx = 17
+                intercept_t_idx = 20
+            elif o.shape[0] == 23:
+                own_handle_idx = 11
+                intercept_y_idx = 19
+                intercept_t_idx = 22
+            else:
+                raise ValueError(
+                    f"Unsupported observation length {o.shape[0]} for ScriptedPolicy"
+                )
             ball_y      = float(o[1])
-            handle_pos  = float(o[10])   # current handle position (m)
-            intercept_y = float(o[17])
-            intercept_t = float(o[20])
+            handle_pos  = float(o[own_handle_idx])   # current handle position (m)
+            intercept_y = float(o[intercept_y_idx])
+            intercept_t = float(o[intercept_t_idx])
 
             # Ball is heading toward our goal when intercept_t is valid
             ball_coming = intercept_t > 1e-3
@@ -121,7 +135,12 @@ class ScriptedPolicy:
 
             _, _, bar_side, handle_target = min(cand, key=lambda x: (x[0], x[1]))
 
-            handle_pos_action = handle_target / self.HANDLE_MAX   # [-1, 1]
+            handle_delta = handle_target - handle_pos
+            handle_pos_action = float(np.clip(
+                handle_delta / self.HANDLE_DELTA_MAX, -1.0, 1.0
+            ))
+            if abs(handle_pos_action) < self.HANDLE_DELTA_DEADZONE:
+                handle_pos_action = 0.0
             handle_vel_action = 1.0                                # max speed
 
             aligned = abs(handle_pos - handle_target) < 0.045
@@ -582,6 +601,13 @@ def main():
                         choices=["random_fire", "corner", "random"])
     parser.add_argument("--handle_vel_cap_mps",  type=float, default=17.0)
     parser.add_argument("--paddle_vel_cap_rads", type=float, default=40.0)
+    parser.add_argument(
+        "--paddle_angle_obs_mode",
+        type=str,
+        default="sincos",
+        choices=["wrapped", "continuous", "sincos"],
+        help="Paddle angle encoding in observations. Must match across train/eval/watch.",
+    )
 
     # Physics
     parser.add_argument("--ball_restitution",    type=float, default=0.30)
@@ -636,11 +662,12 @@ def main():
         serve_mode=args.serve_mode,
         handle_vel_cap_mps=args.handle_vel_cap_mps,
         paddle_vel_cap_rads=args.paddle_vel_cap_rads,
+        paddle_angle_obs_mode=args.paddle_angle_obs_mode,
         ball_restitution=args.ball_restitution,
         wall_restitution=args.wall_restitution,
         paddle_restitution=args.paddle_restitution,
         num_substeps=args.num_substeps,
-        real_time_gui=False,
+        real_time_gui=False
     )
 
     print(f"Creating {args.n_envs} envs (home side only, away handled by workers)...")
