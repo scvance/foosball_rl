@@ -56,7 +56,7 @@ class ShootoutVersusEnv(gym.Env):
         handle_vel_cap_mps: float = 17.0,
         handle_delta_max_m: float = 0.085,
         handle_delta_deadzone: float = 0.05,
-        paddle_vel_cap_rads: float = 40.0 * math.pi,  # 20 rev/s
+        paddle_vel_cap_rads: float = 2.0 * 7.0 * math.pi,  # 20 rev/s
         paddle_cmd_deadzone: float = 0.05,
         paddle_cmd_flip_penalty: float = 0.02,
         paddle_cmd_flip_threshold: float = 0.35,
@@ -68,6 +68,9 @@ class ShootoutVersusEnv(gym.Env):
         away_goal_vx_penalty: float = 0.02,
         action_vel_penalty: float = 0.02,
         action_handle_penalty: float = 0.02,
+        handle_cmd_smooth_penalty: float = 0.02,
+        handle_cmd_flip_penalty: float = 0.01,
+        handle_cmd_flip_threshold: float = 0.35,
         # paddle-angle observation encoding:
         #   'wrapped'    -> angle wrapped to [-pi, pi] (legacy)
         #   'continuous' -> unbounded angle (good for debugging continuity)
@@ -114,6 +117,11 @@ class ShootoutVersusEnv(gym.Env):
         self.away_goal_vx_penalty = float(max(0.0, away_goal_vx_penalty))
         self.action_vel_penalty = float(max(0.0, action_vel_penalty))
         self.action_handle_penalty = float(max(0.0, action_handle_penalty))
+        self.handle_cmd_smooth_penalty = float(max(0.0, handle_cmd_smooth_penalty))
+        self.handle_cmd_flip_penalty = float(max(0.0, handle_cmd_flip_penalty))
+        self.handle_cmd_flip_threshold = float(
+            max(0.0, min(1.0, handle_cmd_flip_threshold))
+        )
         self.real_time_gui = bool(real_time_gui)
         if paddle_angle_obs_mode not in ("wrapped", "continuous", "sincos"):
             raise ValueError(
@@ -153,6 +161,7 @@ class ShootoutVersusEnv(gym.Env):
         self._episode_step = 0
         self._terminated_event: Optional[str] = None
         self._prev_paddle_cmd = {"home": 0.0, "away": 0.0}
+        self._prev_handle_cmd = {"home": 0.0, "away": 0.0}
 
         if self.sim.opponent_handle_idx is None or self.sim.opponent_paddle_idx is None:
             raise RuntimeError(
@@ -182,6 +191,7 @@ class ShootoutVersusEnv(gym.Env):
         self._episode_step = 0
         self._terminated_event = None
         self._prev_paddle_cmd = {"home": 0.0, "away": 0.0}
+        self._prev_handle_cmd = {"home": 0.0, "away": 0.0}
 
         self.sim.remove_ball()
         self.sim.reset_robot_randomized()
@@ -574,6 +584,38 @@ class ShootoutVersusEnv(gym.Env):
         away -= self.action_vel_penalty * float(np.linalg.norm(a_a[1:]))
         home -= self.action_handle_penalty * float(abs(a_h[0]))
         away -= self.action_handle_penalty * float(abs(a_a[0]))
+
+        # Handle smoothness penalty: discourage jitter / rapid oscillation.
+        h_hd = float(np.clip(a_h[0], -1.0, 1.0))
+        a_hd = float(np.clip(a_a[0], -1.0, 1.0))
+        if abs(h_hd) < self.handle_delta_deadzone:
+            h_hd = 0.0
+        if abs(a_hd) < self.handle_delta_deadzone:
+            a_hd = 0.0
+
+        h_prev_hd = float(self._prev_handle_cmd["home"])
+        a_prev_hd = float(self._prev_handle_cmd["away"])
+
+        # Penalize large changes in commanded handle motion each policy step.
+        home -= self.handle_cmd_smooth_penalty * abs(h_hd - h_prev_hd)
+        away -= self.handle_cmd_smooth_penalty * abs(a_hd - a_prev_hd)
+
+        # Extra penalty on hard sign flips to reduce left-right chatter.
+        h_flip = (h_prev_hd * h_hd < 0.0) and (
+            abs(h_prev_hd) > self.handle_cmd_flip_threshold
+            and abs(h_hd) > self.handle_cmd_flip_threshold
+        )
+        a_flip = (a_prev_hd * a_hd < 0.0) and (
+            abs(a_prev_hd) > self.handle_cmd_flip_threshold
+            and abs(a_hd) > self.handle_cmd_flip_threshold
+        )
+        if h_flip:
+            home -= self.handle_cmd_flip_penalty
+        if a_flip:
+            away -= self.handle_cmd_flip_penalty
+
+        self._prev_handle_cmd["home"] = h_hd
+        self._prev_handle_cmd["away"] = a_hd
 
         # Explicit oscillation penalty on paddle velocity command via sign flips.
         h_cmd = float(np.clip(a_h[2], -1.0, 1.0))
